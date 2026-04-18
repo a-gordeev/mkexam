@@ -42,44 +42,89 @@
         <i class="bi bi-plus-lg"></i> Add source
       </button>
 
-      <!-- Gemini backend -->
+      <!-- LLM backend -->
       <div class="card mb-4">
         <div class="card-body">
-          <label class="form-label fw-semibold mb-2"><i class="bi bi-cloud"></i> Gemini API</label>
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">API Key</label>
-            <input type="password" name="gemini_api_key" class="form-control form-control-sm"
-                   placeholder="{{ '(using key from .env)' if env_gemini_key else 'Paste your API key…' }}">
-            {% if not env_gemini_key %}
-            <div class="form-text">
-              <a href="https://aistudio.google.com/apikey" target="_blank">Get a free key at Google AI Studio</a>
-            </div>
-            {% endif %}
-          </div>
-          <label class="form-label small fw-semibold">Model</label>
-          <div class="row g-2 mb-2">
-            {% for m in gemini_model_catalog %}
-            <div class="col-md-6">
-              <label class="model-card card h-100 {% if m.id == env_gemini_model %}border-primary{% endif %}"
-                     style="cursor:pointer" for="gm-{{ loop.index0 }}">
-                <div class="card-body py-2 px-3">
-                  <div class="d-flex align-items-center gap-2 mb-1">
-                    <input type="radio" class="form-check-input flex-shrink-0"
-                           name="gemini_model" id="gm-{{ loop.index0 }}" value="{{ m.id }}"
-                           {{ 'checked' if m.id == env_gemini_model }}
-                           onchange="highlightModel(this)">
-                    <span class="fw-semibold small">{{ m.label }}</span>
-                    <span class="ms-auto badge bg-body-tertiary text-body-secondary border small">{{ m.cost }}</span>
-                  </div>
-                  <div class="d-flex gap-3 mb-1">
-                    <span class="text-muted" style="font-size:.7rem">Speed {{ '⚡' * m.speed }}</span>
-                    <span class="text-muted" style="font-size:.7rem">Quality {{ '★' * m.quality }}{{ '☆' * (5 - m.quality) }}</span>
-                  </div>
-                  <p class="text-muted mb-0" style="font-size:.72rem">{{ m.note }}</p>
-                </div>
+          <label class="form-label fw-semibold mb-2">LLM Backend</label>
+          <div class="d-flex gap-3 mb-3">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="llm_backend"
+                     id="be-gemini" value="gemini"
+                     {{ 'checked' if env_backend == 'gemini' }}
+                     onchange="switchBackend('gemini')">
+              <label class="form-check-label" for="be-gemini">
+                <i class="bi bi-cloud"></i> Gemini API
               </label>
             </div>
-            {% endfor %}
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="llm_backend"
+                     id="be-openai" value="openai"
+                     {{ 'checked' if env_backend == 'openai' }}
+                     onchange="switchBackend('openai')">
+              <label class="form-check-label" for="be-openai">
+                <i class="bi bi-hdd-network"></i> OpenAI-compatible
+              </label>
+            </div>
+          </div>
+
+          <!-- Gemini fields -->
+          <div id="be-gemini-fields">
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">API Key</label>
+              <input type="password" name="gemini_api_key" class="form-control form-control-sm"
+                     placeholder="{{ '(using key from .env)' if env_gemini_key else 'Paste your API key…' }}">
+              {% if not env_gemini_key %}
+              <div class="form-text">
+                <a href="https://aistudio.google.com/apikey" target="_blank">Get a free key at Google AI Studio</a>
+              </div>
+              {% endif %}
+            </div>
+            <label class="form-label small fw-semibold">Model</label>
+            <div class="row g-2 mb-2">
+              {% for m in gemini_model_catalog %}
+              <div class="col-md-6">
+                <label class="model-card card h-100 {% if m.id == env_gemini_model %}border-primary{% endif %}"
+                       style="cursor:pointer" for="gm-{{ loop.index0 }}">
+                  <div class="card-body py-2 px-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                      <input type="radio" class="form-check-input flex-shrink-0"
+                             name="gemini_model" id="gm-{{ loop.index0 }}" value="{{ m.id }}"
+                             {{ 'checked' if m.id == env_gemini_model }}
+                             onchange="highlightModel(this)">
+                      <span class="fw-semibold small">{{ m.label }}</span>
+                      <span class="ms-auto badge bg-body-tertiary text-body-secondary border small">{{ m.cost }}</span>
+                    </div>
+                    <div class="d-flex gap-3 mb-1">
+                      <span class="text-muted" style="font-size:.7rem">Speed {{ '⚡' * m.speed }}</span>
+                      <span class="text-muted" style="font-size:.7rem">Quality {{ '★' * m.quality }}{{ '☆' * (5 - m.quality) }}</span>
+                    </div>
+                    <p class="text-muted mb-0" style="font-size:.72rem">{{ m.note }}</p>
+                  </div>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <!-- OpenAI-compatible fields -->
+          <div id="be-openai-fields" style="display:none">
+            <div class="mb-2">
+              <label class="form-label small fw-semibold">Base URL</label>
+              <input type="url" name="openai_base_url" class="form-control form-control-sm"
+                     placeholder="https://llm.ai.e-infra.cz/v1/"
+                     value="{{ env_openai_base_url }}">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-semibold">API Key <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="password" name="openai_api_key" class="form-control form-control-sm"
+                     placeholder="{{ '(set in .env)' if env_openai_api_key else 'Leave empty if not required' }}">
+            </div>
+            <div class="mb-1">
+              <label class="form-label small fw-semibold">Model name</label>
+              <input type="text" name="openai_model" class="form-control form-control-sm"
+                     placeholder="e.g. llama-3.3-70b-instruct"
+                     value="{{ env_openai_model }}">
+            </div>
           </div>
         </div>
       </div>
@@ -200,12 +245,19 @@ document.getElementById('gen-form').addEventListener('submit', function(e) {
     '<span class="spinner-border spinner-border-sm me-2"></span>Generating…';
 });
 
+function switchBackend(be) {
+  document.getElementById('be-gemini-fields').style.display = be === 'gemini' ? '' : 'none';
+  document.getElementById('be-openai-fields').style.display = be === 'openai'  ? '' : 'none';
+}
+
 function highlightModel(radio) {
   radio.closest('.row').querySelectorAll('.model-card').forEach(c => {
     c.classList.remove('border-primary');
   });
   radio.closest('.model-card').classList.add('border-primary');
 }
+
+switchBackend(document.querySelector('[name="llm_backend"]:checked')?.value || 'gemini');
 
 // Start with one source
 addSource();

@@ -186,7 +186,81 @@ def _call_gemini(prompt: str, use_json_schema: bool = False) -> tuple[str, dict]
     raise last_exc
 
 
+def _call_openai(prompt: str, use_json_schema: bool = False) -> tuple[str, dict]:
+    """Call an OpenAI-compatible endpoint (streaming) with retry on transient errors."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise RuntimeError("openai package not installed. Run: pip install openai")
+
+    base_url = os.environ.get("OPENAI_BASE_URL", "").rstrip("/") + "/"
+    api_key  = os.environ.get("OPENAI_API_KEY", "no-key")
+    model    = os.environ.get("OPENAI_MODEL", "")
+    if not base_url.strip("/ "):
+        raise RuntimeError("OPENAI_BASE_URL is not configured")
+    if not model:
+        raise RuntimeError("OPENAI_MODEL is not configured")
+
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    system = (
+        SYSTEM_PROMPT
+        + "\nIMPORTANT: your entire response must be valid JSON only."
+        " Output a JSON array [...] with no surrounding text, no markdown,"
+        " no explanation before or after."
+    )
+    create_kwargs: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": prompt},
+        ],
+        "temperature": 0.7,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if use_json_schema:
+        create_kwargs["response_format"] = {"type": "json_object"}
+
+    cb = getattr(_tl, "stream_cb", None)
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(4):
+        try:
+            if cb is not None:
+                cb(0)
+            parts: list[str] = []
+            stream_count = 0
+            prompt_tokens = 0
+            output_tokens = 0
+            with client.chat.completions.create(**create_kwargs) as stream:
+                for chunk in stream:
+                    if chunk.choices:
+                        delta = chunk.choices[0].delta.content or ""
+                        if delta:
+                            parts.append(delta)
+                            stream_count += 1
+                            if cb is not None:
+                                cb(stream_count)
+                    if getattr(chunk, "usage", None):
+                        prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                        output_tokens = getattr(chunk.usage, "completion_tokens", 0) or 0
+            text = "".join(parts).strip()
+            if not text:
+                raise ValueError("empty response from OpenAI-compatible endpoint")
+            return text, {"prompt_tokens": prompt_tokens, "output_tokens": output_tokens, "thinking_tokens": 0}
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if (any(h in msg for h in _TRANSIENT_HINTS) or "empty response" in msg) and attempt < 3:
+                time.sleep(5 * (2 ** attempt))
+            else:
+                raise
+    raise last_exc
+
+
 def _call(prompt: str, use_json_schema: bool = False) -> tuple[str, dict]:
+    backend = os.environ.get("LLM_BACKEND", "gemini").lower()
+    if backend == "openai":
+        return _call_openai(prompt, use_json_schema=use_json_schema)
     return _call_gemini(prompt, use_json_schema=use_json_schema)
 
 

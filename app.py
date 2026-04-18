@@ -127,7 +127,8 @@ def _estimate_cost(n: int | None, num_parts: int, gen_units: list) -> dict:
         output_tokens += num_batches * 1500
 
     content_tokens = total_len // CHARS_PER_TOKEN
-    cost_usd = input_tokens * INPUT_PRICE + output_tokens * OUTPUT_PRICE
+    backend = os.environ.get("LLM_BACKEND", "gemini").lower()
+    cost_usd = (input_tokens * INPUT_PRICE + output_tokens * OUTPUT_PRICE) if backend == "gemini" else 0.0
 
     return {
         "content_tokens": content_tokens,
@@ -135,6 +136,7 @@ def _estimate_cost(n: int | None, num_parts: int, gen_units: list) -> dict:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cost_usd": round(cost_usd, 4),
+        "free_backend": backend != "gemini",
     }
 
 
@@ -187,10 +189,18 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
 
     # Apply per-job LLM config (overrides env for this thread)
     llm_config = job.get("llm_config", {})
+    if llm_config.get("backend"):
+        os.environ["LLM_BACKEND"] = llm_config["backend"]
     if llm_config.get("gemini_api_key"):
         os.environ["GEMINI_API_KEY"] = llm_config["gemini_api_key"]
     if llm_config.get("gemini_model"):
         os.environ["GEMINI_MODEL"] = llm_config["gemini_model"]
+    if llm_config.get("openai_base_url"):
+        os.environ["OPENAI_BASE_URL"] = llm_config["openai_base_url"]
+    if llm_config.get("openai_api_key"):
+        os.environ["OPENAI_API_KEY"] = llm_config["openai_api_key"]
+    if llm_config.get("openai_model"):
+        os.environ["OPENAI_MODEL"] = llm_config["openai_model"]
 
     # Wire up streaming progress: write token count to a sidecar file (throttled)
     from mkexam import generate as _gen_mod
@@ -300,12 +310,15 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
     if not job.get("confirmed"):
         gen_units_for_est = content_data.get("gen_units") or [{"text": content}]
         estimates = _estimate_cost(n, len(parts), gen_units_for_est)
-        _update_job(job_id, status="pending_confirm", phase="confirming", **estimates)
-        while True:
-            time.sleep(2)
-            if _check_stop(job_id): return
-            if _load_job(job_id).get("confirmed"):
-                _update_job(job_id, status="running"); break
+        if estimates.get("free_backend"):
+            _update_job(job_id, confirmed=True, **estimates)
+        else:
+            _update_job(job_id, status="pending_confirm", phase="confirming", **estimates)
+            while True:
+                time.sleep(2)
+                if _check_stop(job_id): return
+                if _load_job(job_id).get("confirmed"):
+                    _update_job(job_id, status="running"); break
 
     if _check_stop(job_id): return
 
@@ -442,7 +455,11 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
     # Strip the hint cards — only save questions generated in this job
     new_questions = questions[len(_hint_cards):]
     try:
-        llm_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        backend = os.environ.get("LLM_BACKEND", "gemini").lower()
+        if backend == "openai":
+            llm_model = os.environ.get("OPENAI_MODEL", "")
+        else:
+            llm_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
         _stats = getattr(_gen_mod._tl, "stats", {})
         gen_stats = {
             "generated":      len(new_questions),
@@ -591,9 +608,13 @@ GEMINI_MODEL_CATALOG = [
 def _backend_ctx() -> dict:
     """Template context vars for the LLM backend selector."""
     return {
+        "env_backend":          os.environ.get("LLM_BACKEND", "gemini").lower(),
         "env_gemini_key":       bool(os.environ.get("GEMINI_API_KEY")),
         "env_gemini_model":     os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
         "gemini_model_catalog": GEMINI_MODEL_CATALOG,
+        "env_openai_base_url":  os.environ.get("OPENAI_BASE_URL", ""),
+        "env_openai_api_key":   bool(os.environ.get("OPENAI_API_KEY")),
+        "env_openai_model":     os.environ.get("OPENAI_MODEL", ""),
     }
 
 
@@ -1013,15 +1034,28 @@ def _handle_generate_post(req, target_deck_id: str | None):
         flash("Please enter a deck name.", "danger")
         return render_template("generate.html")
 
-    # Resolve Gemini config: form overrides env
-    gemini_key   = req.form.get("gemini_api_key", "").strip() or os.environ.get("GEMINI_API_KEY", "")
-    gemini_model = req.form.get("gemini_model",   "").strip() or os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
+    # Resolve backend config: form overrides env
+    backend = (req.form.get("llm_backend") or os.environ.get("LLM_BACKEND") or "gemini").lower()
 
-    if not gemini_key:
-        flash("Gemini API key is required. Enter it in the form or set GEMINI_API_KEY in .env.", "danger")
-        return render_template("generate.html", target_deck=target_deck, **_backend_ctx())
-
-    llm_config = {"gemini_api_key": gemini_key, "gemini_model": gemini_model}
+    if backend == "openai":
+        openai_base_url = req.form.get("openai_base_url", "").strip() or os.environ.get("OPENAI_BASE_URL", "")
+        openai_api_key  = req.form.get("openai_api_key",  "").strip() or os.environ.get("OPENAI_API_KEY",  "")
+        openai_model    = req.form.get("openai_model",    "").strip() or os.environ.get("OPENAI_MODEL",    "")
+        if not openai_base_url:
+            flash("OpenAI-compatible base URL is required.", "danger")
+            return render_template("generate.html", target_deck=target_deck, **_backend_ctx())
+        if not openai_model:
+            flash("Model name is required for OpenAI-compatible endpoint.", "danger")
+            return render_template("generate.html", target_deck=target_deck, **_backend_ctx())
+        llm_config = {"backend": "openai", "openai_base_url": openai_base_url,
+                      "openai_api_key": openai_api_key, "openai_model": openai_model}
+    else:
+        gemini_key   = req.form.get("gemini_api_key", "").strip() or os.environ.get("GEMINI_API_KEY", "")
+        gemini_model = req.form.get("gemini_model",   "").strip() or os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
+        if not gemini_key:
+            flash("Gemini API key is required. Enter it in the form or set GEMINI_API_KEY in .env.", "danger")
+            return render_template("generate.html", target_deck=target_deck, **_backend_ctx())
+        llm_config = {"backend": "gemini", "gemini_api_key": gemini_key, "gemini_model": gemini_model}
 
     # Collect source specs — save uploaded files to disk immediately (request ends after return)
     source_specs = []
