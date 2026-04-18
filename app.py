@@ -127,8 +127,7 @@ def _estimate_cost(n: int | None, num_parts: int, gen_units: list) -> dict:
         output_tokens += num_batches * 1500
 
     content_tokens = total_len // CHARS_PER_TOKEN
-    backend = os.environ.get("LLM_BACKEND", "gemini").lower()
-    cost_usd = (input_tokens * INPUT_PRICE + output_tokens * OUTPUT_PRICE) if backend == "gemini" else 0.0
+    cost_usd = input_tokens * INPUT_PRICE + output_tokens * OUTPUT_PRICE
 
     return {
         "content_tokens": content_tokens,
@@ -136,7 +135,6 @@ def _estimate_cost(n: int | None, num_parts: int, gen_units: list) -> dict:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cost_usd": round(cost_usd, 4),
-        "local_backend": backend != "gemini",
     }
 
 
@@ -147,27 +145,21 @@ def _compute_actual_cost(usage_acc: list[dict]) -> dict:
       Input:    $0.15 / 1M tokens
       Output:   $0.60 / 1M tokens
       Thinking: $3.50 / 1M tokens
-    Local backends (Ollama) are free.
     """
     prompt   = sum(u.get("prompt_tokens",   0) for u in usage_acc)
     output   = sum(u.get("output_tokens",   0) for u in usage_acc)
     thinking = sum(u.get("thinking_tokens", 0) for u in usage_acc)
 
-    backend = os.environ.get("LLM_BACKEND", "gemini").lower()
-    if backend == "gemini":
-        INPUT_PRICE    = 0.15 / 1_000_000
-        OUTPUT_PRICE   = 0.60 / 1_000_000
-        THINKING_PRICE = 3.50 / 1_000_000
-        cost = prompt * INPUT_PRICE + output * OUTPUT_PRICE + thinking * THINKING_PRICE
-    else:
-        cost = 0.0
+    INPUT_PRICE    = 0.15 / 1_000_000
+    OUTPUT_PRICE   = 0.60 / 1_000_000
+    THINKING_PRICE = 3.50 / 1_000_000
+    cost = prompt * INPUT_PRICE + output * OUTPUT_PRICE + thinking * THINKING_PRICE
 
     return {
         "actual_prompt_tokens":   prompt,
         "actual_output_tokens":   output,
         "actual_thinking_tokens": thinking,
         "actual_cost_usd":        round(cost, 5),
-        "local_backend":          backend != "gemini",
     }
 
 
@@ -195,16 +187,10 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
 
     # Apply per-job LLM config (overrides env for this thread)
     llm_config = job.get("llm_config", {})
-    if llm_config.get("backend"):
-        os.environ["LLM_BACKEND"] = llm_config["backend"]
     if llm_config.get("gemini_api_key"):
         os.environ["GEMINI_API_KEY"] = llm_config["gemini_api_key"]
     if llm_config.get("gemini_model"):
         os.environ["GEMINI_MODEL"] = llm_config["gemini_model"]
-    if llm_config.get("ollama_model"):
-        os.environ["OLLAMA_MODEL"] = llm_config["ollama_model"]
-    if llm_config.get("ollama_base_url"):
-        os.environ["OLLAMA_BASE_URL"] = llm_config["ollama_base_url"]
 
     # Wire up streaming progress: write token count to a sidecar file (throttled)
     from mkexam import generate as _gen_mod
@@ -314,16 +300,12 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
     if not job.get("confirmed"):
         gen_units_for_est = content_data.get("gen_units") or [{"text": content}]
         estimates = _estimate_cost(n, len(parts), gen_units_for_est)
-        if estimates.get("local_backend"):
-            # Free backend — no approval needed; confirm immediately
-            _update_job(job_id, confirmed=True, **estimates)
-        else:
-            _update_job(job_id, status="pending_confirm", phase="confirming", **estimates)
-            while True:
-                time.sleep(2)
-                if _check_stop(job_id): return
-                if _load_job(job_id).get("confirmed"):
-                    _update_job(job_id, status="running"); break
+        _update_job(job_id, status="pending_confirm", phase="confirming", **estimates)
+        while True:
+            time.sleep(2)
+            if _check_stop(job_id): return
+            if _load_job(job_id).get("confirmed"):
+                _update_job(job_id, status="running"); break
 
     if _check_stop(job_id): return
 
@@ -460,11 +442,7 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
     # Strip the hint cards — only save questions generated in this job
     new_questions = questions[len(_hint_cards):]
     try:
-        backend = os.environ.get("LLM_BACKEND", "ollama").lower()
-        if backend == "gemini":
-            llm_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        else:
-            llm_model = os.environ.get("OLLAMA_MODEL", "")
+        llm_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
         _stats = getattr(_gen_mod._tl, "stats", {})
         gen_stats = {
             "generated":      len(new_questions),
@@ -610,148 +588,12 @@ GEMINI_MODEL_CATALOG = [
     },
 ]
 
-OLLAMA_MODEL_CATALOG = [
-    {
-        "id": "llama3.2:3b",
-        "label": "Llama 3.2 3B",
-        "ram": "~2 GB",
-        "speed": 5,
-        "quality": 2,
-        "note": "Fastest available. Good JSON compliance; weaker distractors.",
-        "bench": {"tps": 9.1, "ttft_s": 11.7},
-    },
-    {
-        "id": "gemma3:latest",
-        "label": "Gemma 3 4B",
-        "ram": "~3 GB",
-        "speed": 4,
-        "quality": 2,
-        "note": "Fast on most laptops. Distractors are weak; JSON sometimes malformed.",
-        "bench": {"tps": 8.4, "ttft_s": 13.0},
-    },
-    {
-        "id": "qwen2.5:7b-instruct-q4_K_M",
-        "label": "Qwen 2.5 7B Instruct Q4",
-        "ram": "~5 GB",
-        "speed": 4,
-        "quality": 3,
-        "tag": "⚡ Speed priority",
-        "note": "Near-instant first token. Reliable JSON. Recommended for ≤8 GB RAM.",
-        "bench": {"tps": 5.9, "ttft_s": 0.3},
-    },
-    {
-        "id": "qwen2.5:7b",
-        "label": "Qwen 2.5 7B",
-        "ram": "~5 GB",
-        "speed": 4,
-        "quality": 3,
-        "note": "Best small model for structured JSON.",
-        "bench": {"tps": 4.7, "ttft_s": 25.6},
-    },
-    {
-        "id": "gemma3:12b",
-        "label": "Gemma 3 12B",
-        "ram": "~9 GB",
-        "speed": 3,
-        "quality": 3,
-        "tag": "⚖️ Quality/speed balance",
-        "note": "Solid quality. Needs 12+ GB free RAM to avoid swapping.",
-        "bench": {"tps": 3.0, "ttft_s": 41.8},
-    },
-    {
-        "id": "qwen2.5:14b",
-        "label": "Qwen 2.5 14B",
-        "ram": "~11 GB",
-        "speed": 3,
-        "quality": 4,
-        "note": "Very reliable JSON structure and good distractor variety.",
-    },
-    {
-        "id": "gemma3:27b",
-        "label": "Gemma 3 27B",
-        "ram": "~20 GB",
-        "speed": 2,
-        "quality": 4,
-        "note": "Near-Gemini quality locally. Requires 24+ GB RAM.",
-    },
-    {
-        "id": "custom",
-        "label": "Custom…",
-        "ram": "varies",
-        "speed": 0,
-        "quality": 0,
-        "note": "Enter any model name available in your Ollama installation.",
-    },
-]
-
-
-def _fetch_ollama_models(base_url: str) -> tuple[list[dict], bool]:
-    """Return (models, ollama_running).
-
-    All catalog models are returned; each has an ``installed`` bool.
-    Models pulled locally but not in the catalog are appended at the end.
-    """
-    import requests as _req
-    try:
-        data = _req.get(f"{base_url.rstrip('/')}/api/tags", timeout=3).json()
-        raw = data.get("models", [])
-        installed_map = {m["name"]: m for m in raw}
-        ollama_running = True
-    except Exception:
-        installed_map = {}
-        ollama_running = False
-
-    seen = set()
-    result = []
-
-    for m in OLLAMA_MODEL_CATALOG:
-        # Match by exact id or by "base:tag" against installed names
-        catalog_has_tag = ":" in m["id"]
-        matched_name = next(
-            (name for name in installed_map
-             if name == m["id"]
-             or (not catalog_has_tag and name.split(":")[0] == m["id"])),
-            None,
-        )
-        installed = matched_name is not None
-        size_gb = None
-        if installed:
-            size_bytes = installed_map[matched_name].get("size", 0)
-            size_gb = round(size_bytes / 1e9, 1) if size_bytes else None
-        entry = dict(m,
-                     installed=installed,
-                     installed_as=matched_name,
-                     size_gb=size_gb)
-        result.append(entry)
-        if matched_name:
-            seen.add(matched_name)
-
-    # Append any installed models not in catalog
-    for name, info in installed_map.items():
-        if name not in seen:
-            size_gb = round(info.get("size", 0) / 1e9, 1) if info.get("size") else None
-            result.append({
-                "id": name, "label": name, "ram": "?",
-                "speed": 0, "quality": 0, "note": "",
-                "installed": True, "installed_as": name, "size_gb": size_gb,
-            })
-
-    return result, ollama_running
-
-
 def _backend_ctx() -> dict:
     """Template context vars for the LLM backend selector."""
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_models, ollama_running = _fetch_ollama_models(ollama_url)
     return {
-        "env_backend":           os.environ.get("LLM_BACKEND", ""),
-        "env_gemini_key":        bool(os.environ.get("GEMINI_API_KEY")),
-        "env_gemini_model":      os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-        "env_ollama_model":      os.environ.get("OLLAMA_MODEL", ""),
-        "env_ollama_url":        ollama_url,
-        "gemini_model_catalog":  GEMINI_MODEL_CATALOG,
-        "ollama_model_catalog":  ollama_models,
-        "ollama_running":        ollama_running,
+        "env_gemini_key":       bool(os.environ.get("GEMINI_API_KEY")),
+        "env_gemini_model":     os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        "gemini_model_catalog": GEMINI_MODEL_CATALOG,
     }
 
 
@@ -1171,31 +1013,15 @@ def _handle_generate_post(req, target_deck_id: str | None):
         flash("Please enter a deck name.", "danger")
         return render_template("generate.html")
 
-    # Resolve backend config: form overrides env
-    backend      = (req.form.get("llm_backend") or os.environ.get("LLM_BACKEND") or "ollama").lower()
-    gemini_key   = req.form.get("gemini_api_key",   "").strip() or os.environ.get("GEMINI_API_KEY",   "")
-    gemini_model = req.form.get("gemini_model",     "").strip() or os.environ.get("GEMINI_MODEL",     "gemini-2.5-flash")
-    ollama_model = req.form.get("ollama_model",     "").strip() or os.environ.get("OLLAMA_MODEL",     "gemma3:27b")
-    ollama_url   = req.form.get("ollama_base_url",  "").strip() or os.environ.get("OLLAMA_BASE_URL",  "http://localhost:11434")
+    # Resolve Gemini config: form overrides env
+    gemini_key   = req.form.get("gemini_api_key", "").strip() or os.environ.get("GEMINI_API_KEY", "")
+    gemini_model = req.form.get("gemini_model",   "").strip() or os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
 
-    if backend == "gemini" and not gemini_key:
+    if not gemini_key:
         flash("Gemini API key is required. Enter it in the form or set GEMINI_API_KEY in .env.", "danger")
         return render_template("generate.html", target_deck=target_deck, **_backend_ctx())
 
-    if backend == "ollama":
-        import requests as _req
-        try:
-            _req.get(f"{ollama_url.rstrip('/')}/api/tags", timeout=3)
-        except Exception:
-            flash(
-                f"Warning: cannot reach Ollama at {ollama_url} — generation will proceed "
-                "but will fail if Ollama is not running.",
-                "warning",
-            )
-
-    llm_config = {"backend": backend, "gemini_api_key": gemini_key,
-                  "gemini_model": gemini_model,
-                  "ollama_model": ollama_model, "ollama_base_url": ollama_url}
+    llm_config = {"gemini_api_key": gemini_key, "gemini_model": gemini_model}
 
     # Collect source specs — save uploaded files to disk immediately (request ends after return)
     source_specs = []

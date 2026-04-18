@@ -12,21 +12,6 @@ BATCH_SIZE = 5
 # Thread-local storage: app sets stream_cb to receive per-token progress updates
 _tl = threading.local()
 
-# JSON schema for schema-constrained generation (Ollama format field)
-_QUESTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "question":    {"type": "string"},
-        "options":     {"type": "array",  "items": {"type": "string"},  "minItems": 5, "maxItems": 5},
-        "answer":      {"type": "array",  "items": {"type": "integer", "minimum": 1, "maximum": 5}, "minItems": 2, "maxItems": 2},
-        "comments":    {"type": "object", "additionalProperties": {"type": "string"}},
-        "explanation": {"type": "string"},
-        "sources":     {"type": "object", "additionalProperties": {"type": "string"}},
-    },
-    "required": ["question", "options", "answer", "comments", "explanation", "sources"],
-}
-_QUESTIONS_SCHEMA = {"type": "array", "items": _QUESTION_SCHEMA}
-
 SYSTEM_PROMPT = (
     "You are an expert educator creating examination questions from source material. "
     "CRITICAL: never invent, infer, or hallucinate any fact, term, number, or claim. "
@@ -201,92 +186,7 @@ def _call_gemini(prompt: str, use_json_schema: bool = False) -> tuple[str, dict]
     raise last_exc
 
 
-def _call_ollama(prompt: str, schema: dict | None = None) -> tuple[str, dict]:
-    """Call a local Ollama model via streaming /api/chat with optional JSON schema."""
-    import requests
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    model = os.environ.get("OLLAMA_MODEL", "gemma3:27b")
-    system = (
-        SYSTEM_PROMPT
-        + "\nIMPORTANT: your entire response must be valid JSON only."
-        " Output a JSON array [...] with no surrounding text, no markdown,"
-        " no explanation before or after."
-    )
-    payload: dict = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": prompt},
-        ],
-        "stream": True,
-        "options": {"temperature": 0.7},
-    }
-    if schema is not None:
-        payload["format"] = schema
-
-    last_exc: Exception = RuntimeError("no attempts made")
-    for attempt in range(4):
-        try:
-            resp = requests.post(
-                f"{base_url}/api/chat",
-                json=payload,
-                stream=True,
-                timeout=600,
-            )
-            if not resp.ok:
-                try:
-                    detail = resp.json().get("error", resp.text)
-                except Exception:
-                    detail = resp.text or resp.reason
-                raise RuntimeError(f"Ollama error {resp.status_code}: {detail}")
-
-            cb = getattr(_tl, "stream_cb", None)
-            if cb is not None:
-                cb(0)   # signal: new call starting, reset counter
-
-            parts: list[str] = []
-            prompt_tokens = 0
-            output_tokens = 0
-            stream_count = 0
-
-            for raw_line in resp.iter_lines():
-                if not raw_line:
-                    continue
-                chunk = json.loads(raw_line)
-                delta = chunk.get("message", {}).get("content", "")
-                if delta:
-                    parts.append(delta)
-                    stream_count += 1
-                    if cb is not None:
-                        cb(stream_count)
-                if chunk.get("done"):
-                    prompt_tokens = chunk.get("prompt_eval_count", 0)
-                    output_tokens = chunk.get("eval_count", 0)
-
-            text = "".join(parts).strip()
-            if not text:
-                raise ValueError("empty response from Ollama model")
-            return text, {
-                "prompt_tokens":   prompt_tokens,
-                "output_tokens":   output_tokens,
-                "thinking_tokens": 0,
-            }
-        except Exception as exc:
-            last_exc = exc
-            msg = str(exc).lower()
-            if (any(h in msg for h in _TRANSIENT_HINTS) or "empty response" in msg) and attempt < 3:
-                time.sleep(5 * (2 ** attempt))
-            else:
-                raise
-    raise last_exc
-
-
 def _call(prompt: str, use_json_schema: bool = False) -> tuple[str, dict]:
-    """Dispatch to the configured LLM backend (LLM_BACKEND env var)."""
-    backend = os.environ.get("LLM_BACKEND", "gemini").lower()
-    if backend == "ollama":
-        schema = _QUESTIONS_SCHEMA if use_json_schema else None
-        return _call_ollama(prompt, schema=schema)
     return _call_gemini(prompt, use_json_schema=use_json_schema)
 
 
