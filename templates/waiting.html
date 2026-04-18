@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+{% block title %}Generating… — mkexam{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-5 text-center py-5">
+
+    <!-- Spinner / running state -->
+    <div id="spinner-area">
+      <div class="spinner-border text-primary mb-4" style="width:3rem;height:3rem" role="status"></div>
+      <h5 class="fw-semibold mb-2" id="status-msg">Analysing content…</h5>
+      <p class="text-muted small" id="status-sub">This may take up to a minute for long content.</p>
+
+      <div id="progress-area" class="my-3">
+        <div class="progress" style="height:8px">
+          <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated"
+               role="progressbar" style="width:2%"></div>
+        </div>
+        <p class="text-muted small mt-1" id="progress-label"></p>
+
+        <div id="stream-area" style="display:none;margin-top:6px">
+          <div class="progress" style="height:4px">
+            <div id="stream-bar" class="progress-bar bg-info progress-bar-striped progress-bar-animated"
+                 role="progressbar" style="width:0%"></div>
+          </div>
+          <p class="text-muted mt-1" style="font-size:.7rem" id="stream-label"></p>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 justify-content-center mt-3">
+        <button id="pause-btn" class="btn btn-sm btn-outline-secondary" onclick="pauseJob()">
+          <i class="bi bi-pause-circle"></i> Pause
+        </button>
+        <button id="abort-btn" class="btn btn-sm btn-outline-danger" onclick="abortJob()">
+          <i class="bi bi-stop-circle"></i> Abort
+        </button>
+      </div>
+    </div>
+
+    <!-- Paused state -->
+    <div id="paused-area" style="display:none">
+      <i class="bi bi-pause-circle-fill text-secondary" style="font-size:3rem"></i>
+      <h5 class="fw-semibold mt-3 mb-1" id="paused-msg">Generation paused.</h5>
+      <p class="text-muted small mb-3" id="paused-sub"></p>
+      <div class="d-flex gap-2 justify-content-center">
+        <button class="btn btn-primary" onclick="continueJob()">
+          <i class="bi bi-play-fill"></i> Continue
+        </button>
+        <button class="btn btn-outline-danger" onclick="abortJob()">
+          <i class="bi bi-trash"></i> Discard
+        </button>
+      </div>
+    </div>
+
+    <!-- Cost confirmation -->
+    <div id="confirm-area" style="display:none" class="text-start">
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-receipt text-primary fs-4"></i>
+        <h5 class="fw-bold mb-0" id="confirm-heading">Estimated API cost</h5>
+      </div>
+
+      <div class="card border-primary mb-3">
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted">Content size</td>
+                <td class="fw-semibold text-end" id="est-content-tokens">—</td>
+              </tr>
+              <tr>
+                <td class="text-muted">Estimated questions</td>
+                <td class="fw-semibold text-end" id="est-questions">—</td>
+              </tr>
+              <tr>
+                <td class="text-muted">Est. input tokens</td>
+                <td class="fw-semibold text-end" id="est-input-tokens">—</td>
+              </tr>
+              <tr>
+                <td class="text-muted">Est. output tokens</td>
+                <td class="fw-semibold text-end" id="est-output-tokens">—</td>
+              </tr>
+              <tr class="table-primary">
+                <td class="fw-bold">Est. total cost</td>
+                <td class="fw-bold text-end fs-5" id="est-cost">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p class="text-muted small mb-4" id="cost-footnote">
+        <i class="bi bi-info-circle"></i>
+        Gemini 2.5 Flash: ~$0.15/1M input · ~$0.60/1M output (non-thinking).
+        Thinking tokens not included — actual cost may be higher.
+      </p>
+
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1 py-2" onclick="confirmJob()">
+          <i class="bi bi-play-fill"></i> Proceed
+        </button>
+        <button class="btn btn-outline-danger py-2" onclick="abortJob()">
+          <i class="bi bi-x-lg"></i> Cancel
+        </button>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-area" style="display:none">
+      <i class="bi bi-x-circle-fill text-danger" style="font-size:3rem"></i>
+      <h5 class="fw-semibold mt-3 mb-2" id="error-msg"></h5>
+      <a href="{{ url_for('generate') }}" class="btn btn-outline-secondary mt-2">
+        <i class="bi bi-arrow-left"></i> Try again
+      </a>
+    </div>
+
+    <!-- Aborted state -->
+    <div id="aborted-area" style="display:none">
+      <i class="bi bi-stop-circle-fill text-secondary" style="font-size:3rem"></i>
+      <h5 class="fw-semibold mt-3 mb-2">Generation cancelled.</h5>
+      <a href="{{ url_for('generate') }}" class="btn btn-outline-secondary mt-2">
+        <i class="bi bi-arrow-left"></i> Back
+      </a>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const JOB_ID = "{{ job_id }}";
+const PHASE_MSGS = {
+  extracting:      ["Extracting content…", "Reading your sources…"],
+  analyzing:       ["Checking for contradictions…", "Comparing sources…"],
+  verifying:       ["Verifying existing cards…", "Checking for outdated questions…"],
+  listing:         ["Identifying key concepts…", "Finding testable points…"],
+  generating:      ["Generating questions…", "Almost there…"],
+};
+let abortRequested = false;
+let pauseRequested = false;
+let confirming = false;
+let confirmed = false;
+
+function fmtTokens(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function fmtCost(usd) {
+  if (usd < 0.0001) return '< $0.0001';
+  if (usd < 0.01)   return '$' + usd.toFixed(4);
+  return '$' + usd.toFixed(3);
+}
+
+function showConfirm(data) {
+  document.getElementById('spinner-area').style.display = 'none';
+  document.getElementById('confirm-area').style.display = '';
+  document.getElementById('est-content-tokens').textContent =
+    fmtTokens(data.content_tokens) + ' tokens';
+  document.getElementById('est-questions').textContent =
+    '~' + data.est_questions;
+  document.getElementById('est-input-tokens').textContent =
+    fmtTokens(data.input_tokens);
+  document.getElementById('est-output-tokens').textContent =
+    fmtTokens(data.output_tokens);
+  document.getElementById('est-cost').textContent =
+    data.local_backend ? 'Local (free)' : fmtCost(data.cost_usd);
+  if (data.local_backend) {
+    document.getElementById('confirm-heading').textContent = 'Ready to generate';
+    document.getElementById('cost-footnote').style.display = 'none';
+  }
+}
+
+async function confirmJob() {
+  confirmed = true;
+  await fetch(`/api/job/${JOB_ID}/confirm`, {method: 'POST'});
+  document.getElementById('confirm-area').style.display = 'none';
+  document.getElementById('spinner-area').style.display = '';
+  document.getElementById('status-msg').textContent = 'Starting generation…';
+  confirming = false;
+  setTimeout(poll, 1500);
+}
+
+async function pauseJob() {
+  if (pauseRequested || abortRequested) return;
+  pauseRequested = true;
+  const btn = document.getElementById('pause-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Pausing…'; }
+  await fetch(`/api/job/${JOB_ID}/pause`, {method: 'POST'});
+}
+
+async function continueJob() {
+  document.getElementById('paused-area').style.display = 'none';
+  document.getElementById('spinner-area').style.display = '';
+  document.getElementById('status-msg').textContent = 'Resuming…';
+  pauseRequested = false;
+  const pauseBtn = document.getElementById('pause-btn');
+  if (pauseBtn) { pauseBtn.disabled = false; pauseBtn.innerHTML = '<i class="bi bi-pause-circle"></i> Pause'; }
+  await fetch(`/api/job/${JOB_ID}/continue`, {method: 'POST'});
+  setTimeout(poll, 1500);
+}
+
+async function abortJob() {
+  if (abortRequested) return;
+  abortRequested = true;
+  const btn = document.getElementById('abort-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Aborting…'; }
+  await fetch(`/api/job/${JOB_ID}/abort`, {method: 'POST'});
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`/api/job/${JOB_ID}`);
+    const data = await res.json();
+
+    if (data.status === 'done') {
+      const cost = data.actual_cost_usd;
+      if (cost !== undefined) {
+        const think = data.actual_thinking_tokens
+          ? ` · ${data.actual_thinking_tokens.toLocaleString()} think` : '';
+        document.getElementById('spinner-area').innerHTML =
+          `<i class="bi bi-check-circle-fill text-success" style="font-size:3rem"></i>` +
+          `<h5 class="fw-semibold mt-3 mb-1">Done!</h5>` +
+          (data.cards_removed ? `<p class="text-muted small mb-0"><i class="bi bi-trash"></i> ${data.cards_removed} outdated card(s) removed and replaced.</p>` : '') +
+          (data.local_backend
+            ? `<p class="text-muted small mb-0">Local model — no API cost</p>`
+            : `<p class="text-muted small mb-0">Gemini API cost: <strong>$${cost.toFixed(4)}</strong></p>`) +
+          `<p class="text-muted small">${(data.actual_prompt_tokens||0).toLocaleString()} in` +
+          ` · ${(data.actual_output_tokens||0).toLocaleString()} out${think} tokens</p>` +
+          (() => {
+            const s = data.gen_stats || {};
+            const parts = [];
+            if (s.generated)  parts.push(`${s.generated} generated`);
+            if (s.skipped)    parts.push(`<span class="text-warning">${s.skipped} skipped</span>`);
+            if (s.invalid)    parts.push(`<span class="text-warning">${s.invalid} invalid</span>`);
+            if (s.dropped)    parts.push(`${s.dropped} outdated removed`);
+            if (s.retries)    parts.push(`${s.retries} retries`);
+            return parts.length ? `<p class="text-muted small mb-0">${parts.join(' · ')}</p>` : '';
+          })();
+        setTimeout(() => { window.location.href = `/deck/${data.deck_id}`; }, 3000);
+      } else {
+        window.location.href = `/deck/${data.deck_id}`;
+      }
+      return;
+    }
+    if (data.status === 'review_needed') {
+      document.getElementById('status-msg').textContent = 'Contradictions found — redirecting…';
+      window.location.href = '/generate/review';
+      return;
+    }
+    if (data.status === 'aborted') {
+      document.getElementById('spinner-area').style.display = 'none';
+      document.getElementById('confirm-area').style.display = 'none';
+      document.getElementById('aborted-area').style.display = '';
+      return;
+    }
+    if (data.status === 'paused') {
+      document.getElementById('spinner-area').style.display = 'none';
+      document.getElementById('confirm-area').style.display = 'none';
+      const done = data.done || 0, total = data.total;
+      document.getElementById('paused-sub').textContent =
+        total ? `${done} / ${total} questions generated so far.`
+              : done ? `${done} questions generated so far.` : '';
+      if (document.getElementById('paused-area').style.display === 'none'
+          || document.getElementById('paused-area').style.display === '') {
+        document.getElementById('paused-area').style.display = '';
+      }
+      // keep polling so a Continue from another window is reflected here
+      setTimeout(poll, 3000);
+      return;
+    }
+    // If job re-started (e.g. user continued in another tab), hide paused area
+    if (document.getElementById('paused-area').style.display !== 'none') {
+      document.getElementById('paused-area').style.display = 'none';
+      document.getElementById('spinner-area').style.display = '';
+    }
+    if (data.status === 'error') {
+      document.getElementById('spinner-area').style.display = 'none';
+      document.getElementById('confirm-area').style.display = 'none';
+      document.getElementById('error-area').style.display = '';
+      document.getElementById('error-msg').textContent = data.error || 'An unknown error occurred.';
+      return;
+    }
+    if (data.status === 'pending_confirm' && !confirming && !confirmed) {
+      // If the user already confirmed in a previous tab/page load, just re-signal and move on
+      if (data.confirmed) {
+        await fetch(`/api/job/${JOB_ID}/confirm`, {method: 'POST'});
+        setTimeout(poll, 500);
+        return;
+      }
+      confirming = true;
+      showConfirm(data);
+      // Keep polling slowly so abort is still responsive
+      setTimeout(poll, 3000);
+      return;
+    }
+
+    // Still running — update status message and progress bar
+    if (!confirming) {
+      const phase = data.phase || 'generating';
+      const msgs = PHASE_MSGS[phase] || ['Working…'];
+      document.getElementById('status-msg').textContent =
+        msgs[Math.floor(Date.now() / 4000) % msgs.length];
+
+      // Phase → [start%, end%] within the overall pipeline
+      const PHASE_PCT = {
+        extracting:     [2,  15],
+        analyzing:      [15, 25],
+        listing:        [25, 40],
+        verifying:      [40, 50],
+        generating:     [50, 99],
+      };
+      const [pStart, pEnd] = PHASE_PCT[phase] || [50, 90];
+      const done = data.done || 0, total = data.total || 0;
+      const pct = (phase === 'generating' && total > 0)
+        ? pStart + Math.round((done / total) * (pEnd - pStart))
+        : pStart;
+
+      document.getElementById('progress-bar').style.width = pct + '%';
+      document.getElementById('progress-label').textContent =
+        (phase === 'generating' && total > 0)
+          ? `${done} / ${total} questions (${Math.round((done / total) * 100)}%)`
+          : '';
+
+      // Token streaming sub-bar (visible during generating phase)
+      const st = data.stream_tokens || 0;
+      const streamArea = document.getElementById('stream-area');
+      if (phase === 'generating' && st > 0) {
+        // Soft cap based on estimated output tokens per batch
+        const estPerBatch = data.est_questions > 0
+          ? (data.output_tokens / data.est_questions) * 5
+          : 2000;
+        const sPct = Math.min(st / Math.max(estPerBatch, 100) * 100, 95);
+        streamArea.style.display = '';
+        document.getElementById('stream-bar').style.width = sPct + '%';
+        document.getElementById('stream-label').textContent =
+          st.toLocaleString() + ' tokens';
+      } else {
+        streamArea.style.display = 'none';
+      }
+    }
+  } catch (e) {
+    // network hiccup — keep polling
+  }
+  setTimeout(poll, 2500);
+}
+
+setTimeout(poll, 2500);
+</script>
+{% endblock %}

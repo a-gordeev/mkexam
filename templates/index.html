@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}mkexam — My Decks{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0 fw-bold">My Decks</h4>
+  <div class="d-flex gap-2">
+    {% if quiz_only %}
+    <button class="btn btn-sm btn-outline-secondary" id="select-all-btn"
+            onclick="toggleSelectAll()" style="display:none">
+      Select all
+    </button>
+    {% endif %}
+    {% if quiz_only %}
+    <a href="{{ url_for('import_deck') }}" class="btn btn-primary">
+      <i class="bi bi-upload"></i> Import Deck
+    </a>
+    {% else %}
+    <a href="{{ url_for('generate') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg"></i> New Deck
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+{% if active_jobs and not quiz_only %}
+<div class="mb-4">
+  <h6 class="text-muted fw-semibold mb-2 text-uppercase" style="font-size:.75rem;letter-spacing:.05em">
+    <i class="bi bi-cpu"></i> Active generation jobs
+  </h6>
+  {% for job in active_jobs %}
+  <div class="alert mb-2 py-2 px-3 d-flex align-items-center gap-3
+    {{ 'alert-warning' if job.status == 'paused' else 'alert-info' }}" style="font-size:.9rem">
+    <div class="flex-grow-1">
+      <strong>{{ job.deck_name }}</strong>
+      <span class="text-muted ms-2">
+        {% if job.status == 'paused' %}
+          <i class="bi bi-pause-circle-fill"></i> Paused
+          {% if job.total %}— {{ job.done }} / {{ job.total }} questions
+          {% elif job.done %}— {{ job.done }} questions so far{% endif %}
+        {% elif job.status == 'pending_confirm' %}
+          <i class="bi bi-receipt"></i> Awaiting cost confirmation
+        {% else %}
+          <i class="bi bi-arrow-repeat"></i> Running
+          {% if job.total %}— {{ job.done }} / {{ job.total }}{% endif %}
+        {% endif %}
+      </span>
+    </div>
+    <a href="{{ url_for('generate_waiting', job_id=job.job_id) }}"
+       class="btn btn-sm {{ 'btn-warning' if job.status == 'paused' else 'btn-outline-primary' }}">
+      {% if job.status == 'paused' %}
+        <i class="bi bi-play-fill"></i> Resume
+      {% else %}
+        <i class="bi bi-eye"></i> View
+      {% endif %}
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if not decks %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-journal-x" style="font-size:3rem"></i>
+  {% if quiz_only %}
+  <p class="mt-3">No decks yet. Import a .json deck file to get started.</p>
+  <a href="{{ url_for('import_deck') }}" class="btn btn-primary">Import Deck</a>
+  {% else %}
+  <p class="mt-3">No decks yet. Create one from a video, PDF, or URL.</p>
+  <a href="{{ url_for('generate') }}" class="btn btn-primary">Get started</a>
+  {% endif %}
+</div>
+{% else %}
+<div class="row g-3" id="deck-grid">
+  {% for deck in decks %}
+  <div class="col-md-4">
+    <div class="card h-100 deck-card" data-deck-id="{{ deck.id }}"
+         onclick="toggleDeckSelect(this)" style="cursor:pointer">
+      <!-- Selection indicator -->
+      <div class="selected-overlay" style="
+        display:none; position:absolute; inset:0; border-radius:.375rem;
+        background:rgba(var(--bs-primary-rgb),.08); border:2px solid var(--bs-primary); pointer-events:none; z-index:1">
+        <span style="position:absolute;top:8px;right:8px;background:var(--bs-primary);
+                     color:#fff;border-radius:50%;width:24px;height:24px;
+                     display:flex;align-items:center;justify-content:center;font-size:.8rem">
+          <i class="bi bi-check2"></i>
+        </span>
+      </div>
+      <div class="card-body" style="position:relative">
+        <!-- Static title -->
+        <h5 class="card-title fw-semibold deck-title" id="title-{{ deck.id }}">{{ deck.name }}</h5>
+        <!-- Inline rename input (hidden) -->
+        <div class="d-none mb-2" id="rename-{{ deck.id }}" onclick="event.stopPropagation()">
+          <div class="input-group input-group-sm">
+            <input type="text" class="form-control" value="{{ deck.name }}"
+                   id="ri-{{ deck.id }}"
+                   onkeydown="if(event.key==='Enter')saveRename('{{ deck.id }}');if(event.key==='Escape')cancelRename('{{ deck.id }}')">
+            <button class="btn btn-primary" onclick="saveRename('{{ deck.id }}')">Save</button>
+            <button class="btn btn-outline-secondary" onclick="cancelRename('{{ deck.id }}')">✕</button>
+          </div>
+        </div>
+        <p class="text-muted small mb-3">
+          <i class="bi bi-layers"></i> {{ deck.card_count }} cards
+          &nbsp;·&nbsp;
+          <i class="bi bi-calendar3"></i> {{ deck.created }}
+        </p>
+        {% if deck.sources %}
+        <p class="text-muted small mb-2" style="word-break:break-all">
+          {% for src in deck.sources %}
+          <span class="d-block"><i class="bi bi-file-earmark-text me-1"></i>{{ src }}</span>
+          {% endfor %}
+        </p>
+        {% endif %}
+        <div class="d-flex gap-2" onclick="event.stopPropagation()">
+          <a href="{{ url_for('deck_view', deck_id=deck.id) }}"
+             class="btn btn-sm btn-outline-primary flex-grow-1">
+            <i class="bi bi-eye"></i> View
+          </a>
+          {% if quiz_only %}
+          <a href="{{ url_for('quiz', decks=deck.id) }}"
+             class="btn btn-sm btn-success flex-grow-1">
+            <i class="bi bi-play-fill"></i> Quiz
+          </a>
+          {% endif %}
+          <button class="btn btn-sm btn-outline-secondary"
+                  onclick="startRename('{{ deck.id }}')" title="Rename">
+            <i class="bi bi-pencil"></i>
+          </button>
+          <form method="post" action="{{ url_for('deck_delete', deck_id=deck.id) }}"
+                onsubmit="return confirm('Delete this deck?')">
+            <button class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-trash"></i>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if quiz_only %}
+<!-- Floating action bar (appears when 2+ decks selected) -->
+<div id="multi-bar" style="
+  display:none; position:fixed; bottom:1.5rem; left:50%; transform:translateX(-50%);
+  z-index:1050; background:var(--bs-body-color); color:var(--bs-body-bg); border-radius:2rem;
+  padding:.6rem 1.2rem; box-shadow:0 4px 20px rgba(0,0,0,.3);
+  align-items:center; gap:1rem; white-space:nowrap">
+  <span id="multi-label" class="small fw-semibold"></span>
+  <button class="btn btn-sm btn-light" onclick="quizSelected()">
+    <i class="bi bi-play-fill"></i> Quiz selected
+  </button>
+  <button class="btn btn-sm btn-outline-light" onclick="clearSelection()">
+    Clear
+  </button>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const selected = new Set();
+
+function toggleDeckSelect(card) {
+  const id = card.dataset.deckId;
+  const overlay = card.querySelector('.selected-overlay');
+  if (selected.has(id)) {
+    selected.delete(id);
+    overlay.style.display = 'none';
+    card.classList.remove('border-primary');
+  } else {
+    selected.add(id);
+    overlay.style.display = '';
+    card.classList.add('border-primary');
+  }
+  updateBar();
+}
+
+function updateBar() {
+  const bar = document.getElementById('multi-bar');
+  const btn = document.getElementById('select-all-btn');
+  if (selected.size >= 1) {
+    bar.style.display = 'flex';
+    document.getElementById('multi-label').textContent =
+      `${selected.size} deck${selected.size > 1 ? 's' : ''} selected`;
+  } else {
+    bar.style.display = 'none';
+  }
+  if (document.querySelectorAll('.deck-card').length > 1) {
+    btn.style.display = '';
+  }
+}
+
+function clearSelection() {
+  selected.clear();
+  document.querySelectorAll('.deck-card').forEach(c => {
+    c.querySelector('.selected-overlay').style.display = 'none';
+    c.classList.remove('border-primary');
+  });
+  updateBar();
+}
+
+function toggleSelectAll() {
+  const all = document.querySelectorAll('.deck-card');
+  const allSelected = selected.size === all.length;
+  if (allSelected) {
+    clearSelection();
+  } else {
+    all.forEach(c => {
+      selected.add(c.dataset.deckId);
+      c.querySelector('.selected-overlay').style.display = '';
+      c.classList.add('border-primary');
+    });
+    updateBar();
+  }
+  document.getElementById('select-all-btn').textContent =
+    selected.size === all.length ? 'Deselect all' : 'Select all';
+}
+
+function quizSelected() {
+  if (!selected.size) return;
+  window.location.href = '/quiz?decks=' + [...selected].join(',');
+}
+
+function startRename(id) {
+  document.getElementById('title-' + id).classList.add('d-none');
+  document.getElementById('rename-' + id).classList.remove('d-none');
+  document.getElementById('ri-' + id).focus();
+  document.getElementById('ri-' + id).select();
+}
+
+function cancelRename(id) {
+  document.getElementById('title-' + id).classList.remove('d-none');
+  document.getElementById('rename-' + id).classList.add('d-none');
+}
+
+async function saveRename(id) {
+  const name = document.getElementById('ri-' + id).value.trim();
+  if (!name) return;
+  const res = await fetch(`/deck/${id}/rename`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  });
+  const data = await res.json();
+  if (res.ok) {
+    document.getElementById('title-' + id).textContent = data.name;
+    cancelRename(id);
+  } else {
+    alert(data.error);
+  }
+}
+
+// Show select-all button if more than 1 deck
+window.addEventListener('DOMContentLoaded', () => {
+  if (document.querySelectorAll('.deck-card').length > 1) {
+    document.getElementById('select-all-btn').style.display = '';
+  }
+});
+</script>
+{% endblock %}

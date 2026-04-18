@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+{% block title %}mkexam — {% if target_deck %}Add sources{% else %}New Deck{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <h4 class="fw-bold mb-4">
+      {% if target_deck %}
+        Add sources to <span class="text-primary">{{ target_deck.name }}</span>
+      {% else %}
+        Create New Deck
+      {% endif %}
+    </h4>
+
+    <form method="post"
+          action="{{ url_for('deck_add_sources', deck_id=target_deck.id) if target_deck else url_for('generate') }}"
+          enctype="multipart/form-data" id="gen-form">
+
+      <!-- Deck name (hidden when updating) -->
+      {% if target_deck %}
+        <input type="hidden" name="deck_name" value="{{ target_deck.name }}">
+        <div class="alert alert-info small mb-3">
+          <i class="bi bi-info-circle"></i>
+          New questions will be added to <strong>{{ target_deck.name }}</strong>
+          ({{ target_deck.cards|length }} existing cards).
+          Duplicate topics will be skipped automatically.
+        </div>
+      {% else %}
+      <div class="card mb-3">
+        <div class="card-body">
+          <label class="form-label fw-semibold">Deck name</label>
+          <input type="text" name="deck_name" class="form-control"
+                 placeholder="e.g. Biology Lecture 3" required>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Sources list -->
+      <div id="sources-list"></div>
+
+      <button type="button" class="btn btn-outline-secondary w-100 mb-4" onclick="addSource()">
+        <i class="bi bi-plus-lg"></i> Add source
+      </button>
+
+      <!-- LLM backend -->
+      <div class="card mb-4">
+        <div class="card-body">
+          {% if env_backend %}
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="badge bg-secondary text-capitalize">{{ env_backend }}</span>
+            <span class="text-muted small">configured in .env</span>
+            <a href="#" class="ms-auto small text-decoration-none"
+               onclick="toggleOverride(event)">Override</a>
+          </div>
+          <div id="backend-override" style="display:none; margin-top:.75rem">
+          {% else %}
+          <div id="backend-override">
+          {% endif %}
+            <label class="form-label fw-semibold mb-2">LLM Backend</label>
+            <div class="d-flex gap-3 mb-3">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="llm_backend"
+                       id="be-gemini" value="gemini"
+                       {{ 'checked' if env_backend == 'gemini' and env_gemini_key }}
+                       {{ 'disabled' if not env_gemini_key }}
+                       onchange="switchBackend('gemini')">
+                <label class="form-check-label{{ ' text-muted' if not env_gemini_key }}" for="be-gemini"
+                       {% if not env_gemini_key %}title="Set GEMINI_API_KEY in .env to enable"{% endif %}>
+                  <i class="bi bi-cloud"></i> Gemini API{% if not env_gemini_key %} <small>(no key)</small>{% endif %}
+                </label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="llm_backend"
+                       id="be-ollama" value="ollama"
+                       {{ 'checked' if env_backend != 'gemini' or not env_gemini_key }}
+                       onchange="switchBackend('ollama')">
+                <label class="form-check-label" for="be-ollama">
+                  <i class="bi bi-pc-display"></i> Ollama (local)
+                </label>
+              </div>
+            </div>
+
+            <!-- Gemini fields -->
+            <div id="be-gemini-fields">
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">API Key</label>
+                <input type="password" name="gemini_api_key" class="form-control form-control-sm"
+                       placeholder="{{ '(using key from .env)' if env_gemini_key else 'Paste your API key…' }}">
+                {% if not env_gemini_key %}
+                <div class="form-text">
+                  <a href="https://aistudio.google.com/apikey" target="_blank">Get a free key at Google AI Studio</a>
+                </div>
+                {% endif %}
+              </div>
+              <label class="form-label small fw-semibold">Model</label>
+              <div class="row g-2 mb-2" id="gemini-model-cards">
+                {% for m in gemini_model_catalog %}
+                <div class="col-md-6">
+                  <label class="model-card card h-100 {% if m.id == env_gemini_model %}border-primary{% endif %}"
+                         style="cursor:pointer" for="gm-{{ loop.index0 }}">
+                    <div class="card-body py-2 px-3">
+                      <div class="d-flex align-items-center gap-2 mb-1">
+                        <input type="radio" class="form-check-input flex-shrink-0"
+                               name="gemini_model" id="gm-{{ loop.index0 }}" value="{{ m.id }}"
+                               {{ 'checked' if m.id == env_gemini_model }}
+                               onchange="highlightModel(this)">
+                        <span class="fw-semibold small">{{ m.label }}</span>
+                        <span class="ms-auto badge bg-body-tertiary text-body-secondary border small">{{ m.cost }}</span>
+                      </div>
+                      <div class="d-flex gap-3 mb-1">
+                        <span class="text-muted" style="font-size:.7rem">
+                          Speed {{ '⚡' * m.speed }}
+                        </span>
+                        <span class="text-muted" style="font-size:.7rem">
+                          Quality {{ '★' * m.quality }}{{ '☆' * (5 - m.quality) }}
+                        </span>
+                      </div>
+                      <p class="text-muted mb-0" style="font-size:.72rem">{{ m.note }}</p>
+                    </div>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+
+            <!-- Ollama fields -->
+            <div id="be-ollama-fields" style="display:none">
+              {% if not ollama_running %}
+              <div class="alert alert-warning small py-2 mb-2">
+                <i class="bi bi-exclamation-triangle"></i>
+                Ollama is not running — start it first, then reload this page.
+              </div>
+              {% endif %}
+
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <label class="form-label small fw-semibold mb-0">Model</label>
+                <span class="text-muted ms-auto" style="font-size:.7rem">
+                  Speed = tokens/s for this task &nbsp;·&nbsp; Quality = JSON compliance + distractor variety
+                </span>
+              </div>
+              <div class="row g-2 mb-2" id="ollama-model-cards">
+                {% for m in ollama_model_catalog %}
+                {% set selectable = m.installed %}
+                {% set is_default = m.installed_as == env_ollama_model %}
+                <div class="col-md-6">
+                  <label class="model-card card h-100{{ ' border-primary' if is_default }}{{ ' opacity-50' if not selectable }}"
+                         style="{{ 'cursor:pointer' if selectable else 'cursor:default' }}"
+                         for="om-{{ loop.index0 }}">
+                    <div class="card-body py-2 px-3">
+                      <div class="d-flex align-items-center gap-2 mb-1">
+                        <input type="radio" class="form-check-input flex-shrink-0"
+                               name="ollama_model_sel" id="om-{{ loop.index0 }}"
+                               value="{{ m.installed_as or m.id }}"
+                               {{ 'checked' if is_default }}
+                               {{ 'disabled' if not selectable }}
+                               onchange="selectOllamaModel('{{ m.installed_as or m.id }}')">
+                        <span class="fw-semibold small">{{ m.label or m.id }}</span>
+                        <span class="ms-auto d-flex gap-1 align-items-center">
+                          {% if selectable %}
+                          <span class="badge bg-success bg-opacity-10 text-success border border-success small">
+                            <i class="bi bi-check2"></i> installed
+                          </span>
+                          {% else %}
+                          <span class="badge bg-body-tertiary text-body-secondary border small">not installed</span>
+                          {% endif %}
+                        </span>
+                      </div>
+                      <div class="d-flex flex-wrap gap-2 mb-1">
+                        {% if m.ram and m.ram != '?' %}
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          <i class="bi bi-memory"></i> {{ m.ram }} RAM
+                        </span>
+                        {% endif %}
+                        {% if m.size_gb %}
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          <i class="bi bi-hdd"></i> {{ m.size_gb }} GB on disk
+                        </span>
+                        {% endif %}
+                        {% if m.speed %}
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          Speed {{ '⚡' * m.speed }}
+                        </span>
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          Quality {{ '★' * m.quality }}{{ '☆' * (5 - m.quality) }}
+                        </span>
+                        {% endif %}
+                        {% if m.bench %}
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          <i class="bi bi-speedometer2"></i> {{ m.bench.tps }} tok/s
+                        </span>
+                        <span class="badge bg-body-tertiary text-body-secondary border" style="font-size:.68rem">
+                          {{ m.bench.ttft_s }}s first token
+                        </span>
+                        {% endif %}
+                        {% if m.tag %}
+                        <span class="badge bg-primary bg-opacity-10 text-primary border border-primary" style="font-size:.68rem">
+                          {{ m.tag }}
+                        </span>
+                        {% endif %}
+                      </div>
+                      {% if m.note %}
+                      <p class="text-muted mb-0" style="font-size:.71rem">{{ m.note }}</p>
+                      {% endif %}
+                      {% if not selectable %}
+                      <p class="mb-0 mt-1" style="font-size:.68rem">
+                        <code class="text-secondary">ollama pull {{ m.id }}</code>
+                      </p>
+                      {% endif %}
+                    </div>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+              <input type="hidden" name="ollama_model" id="ollama-model-val"
+                     value="{{ env_ollama_model or '' }}">
+              <div class="mb-2 mt-1">
+                <label class="form-label small fw-semibold">Base URL</label>
+                <input type="text" name="ollama_base_url" class="form-control form-control-sm"
+                       placeholder="{{ env_ollama_url or 'http://localhost:11434' }}">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Number of questions -->
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="auto-count"
+                   name="auto_count" value="1" checked
+                   onchange="toggleAutoCount(this.checked)">
+            <label class="form-check-label fw-semibold" for="auto-count">
+              Auto — estimate from content size
+            </label>
+            <div class="form-text">Generates ~1 question per 300 words.</div>
+          </div>
+          <div id="manual-count" style="display:none">
+            <label class="form-label">
+              Number of questions: <span id="nq-label">2</span>
+            </label>
+            <input type="range" class="form-range" name="num_questions" id="nq-range"
+                   min="2" max="64" step="2" value="2"
+                   oninput="document.getElementById('nq-label').textContent = this.value">
+            <div class="d-flex justify-content-between text-muted small"><span>2</span><span>64</span></div>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 py-2" id="gen-btn">
+        <i class="bi bi-cpu"></i> Generate Questions
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAutoCount(auto) {
+  document.getElementById('manual-count').style.display = auto ? 'none' : '';
+}
+
+let sourceCount = 0;
+
+const SOURCE_ICONS = {
+  youtube: '<i class="bi bi-youtube text-danger"></i>',
+  url:     '<i class="bi bi-link-45deg"></i>',
+  pdf:     '<i class="bi bi-file-earmark-pdf text-danger"></i>',
+  text:    '<i class="bi bi-textarea-t"></i>',
+};
+
+function addSource(defaultType = 'youtube') {
+  const idx = sourceCount++;
+  const div = document.createElement('div');
+  div.className = 'card mb-3 source-block';
+  div.dataset.idx = idx;
+  div.innerHTML = `
+    <div class="card-header bg-body-tertiary d-flex align-items-center gap-2 py-2">
+      <span class="fw-semibold small text-muted">Source ${sourceCount}</span>
+      <div class="btn-group btn-group-sm ms-auto" role="group">
+        ${['youtube','url','pdf','text'].map(t => `
+          <input type="radio" class="btn-check" name="src_type_${idx}" id="st_${idx}_${t}"
+                 value="${t}" ${t === defaultType ? 'checked' : ''}
+                 onchange="switchSourceType(${idx}, '${t}')">
+          <label class="btn btn-outline-secondary" for="st_${idx}_${t}">
+            ${SOURCE_ICONS[t]}
+          </label>
+        `).join('')}
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-danger ms-2"
+              onclick="removeSource(this)">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="card-body" id="src_body_${idx}">
+      ${renderSourceInput(idx, defaultType)}
+    </div>
+  `;
+  document.getElementById('sources-list').appendChild(div);
+}
+
+function renderSourceInput(idx, type) {
+  if (type === 'youtube') return `
+    <input type="url" name="youtube_url_${idx}" class="form-control"
+           placeholder="https://www.youtube.com/watch?v=...">
+    <div class="form-text">Captions extracted automatically.</div>`;
+  if (type === 'url') return `
+    <input type="url" name="web_url_${idx}" class="form-control"
+           placeholder="https://example.com/article">`;
+  if (type === 'pdf') return `
+    <input type="file" name="pdf_file_${idx}" class="form-control" accept=".pdf">`;
+  if (type === 'text') return `
+    <textarea name="paste_text_${idx}" class="form-control" rows="6"
+              placeholder="Paste transcript or notes…"></textarea>`;
+  return '';
+}
+
+function switchSourceType(idx, type) {
+  document.getElementById(`src_body_${idx}`).innerHTML = renderSourceInput(idx, type);
+}
+
+function removeSource(btn) {
+  btn.closest('.source-block').remove();
+  // Re-number labels
+  document.querySelectorAll('.source-block').forEach((el, i) => {
+    el.querySelector('.fw-semibold').textContent = `Source ${i + 1}`;
+  });
+}
+
+document.getElementById('gen-form').addEventListener('submit', function(e) {
+  if (!document.querySelector('.source-block')) {
+    e.preventDefault();
+    alert('Add at least one source.');
+    return;
+  }
+  document.getElementById('gen-btn').disabled = true;
+  document.getElementById('gen-btn').innerHTML =
+    '<span class="spinner-border spinner-border-sm me-2"></span>Generating…';
+});
+
+function toggleOverride(e) {
+  e.preventDefault();
+  const el = document.getElementById('backend-override');
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function switchBackend(be) {
+  document.getElementById('be-gemini-fields').style.display = be === 'gemini' ? '' : 'none';
+  document.getElementById('be-ollama-fields').style.display = be === 'ollama'  ? '' : 'none';
+}
+
+function highlightModel(radio) {
+  radio.closest('.row').querySelectorAll('.model-card').forEach(c => {
+    c.classList.remove('border-primary');
+  });
+  radio.closest('.model-card').classList.add('border-primary');
+}
+
+function selectOllamaModel(id) {
+  const val = document.getElementById('ollama-model-val');
+  if (val) val.value = id;
+  const radio = document.querySelector(`[name="ollama_model_sel"][value="${CSS.escape(id)}"]`);
+  if (radio) highlightModel(radio);
+  try { localStorage.setItem('mkexam_ollama_model', id); } catch(e) {}
+}
+
+// Restore last selected Ollama model from localStorage
+(function() {
+  const last = (() => { try { return localStorage.getItem('mkexam_ollama_model'); } catch(e) { return null; } })();
+  if (!last) return;
+  const radio = document.querySelector(`[name="ollama_model_sel"][value="${CSS.escape(last)}"]`);
+  if (radio && !radio.disabled) {
+    radio.checked = true;
+    selectOllamaModel(last);
+  }
+})();
+
+// Init fields based on currently selected radio
+switchBackend(document.querySelector('[name="llm_backend"]:checked')?.value || 'ollama');
+
+
+// Start with one source
+addSource();
+</script>
+{% endblock %}

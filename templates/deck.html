@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}{{ deck.name }} — mkexam{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <!-- Inline rename -->
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <h4 class="fw-bold mb-0" id="deck-title">{{ deck.name }}</h4>
+      <button class="btn btn-sm btn-link p-0 text-muted" onclick="startRename()" title="Rename">
+        <i class="bi bi-pencil"></i>
+      </button>
+    </div>
+    <div id="rename-form" class="d-none mb-2">
+      <div class="input-group input-group-sm" style="max-width:320px">
+        <input type="text" id="rename-input" class="form-control"
+               value="{{ deck.name }}"
+               onkeydown="if(event.key==='Enter')saveRename();if(event.key==='Escape')cancelRename()">
+        <button class="btn btn-primary" onclick="saveRename()">Save</button>
+        <button class="btn btn-outline-secondary" onclick="cancelRename()">Cancel</button>
+      </div>
+    </div>
+    <span class="text-muted small">
+      <i class="bi bi-layers"></i> {{ deck.cards|length }} cards
+      {% if due_count %}
+      &nbsp;·&nbsp;
+      <span class="text-warning fw-semibold"><i class="bi bi-clock"></i> {{ due_count }} due today</span>
+      {% endif %}
+      &nbsp;·&nbsp;
+      <i class="bi bi-calendar3"></i> {{ deck.created }}
+      {% if deck.llm_model %}
+      &nbsp;·&nbsp;
+      <i class="bi bi-cpu"></i> {{ deck.llm_model }}
+      {% endif %}
+    </span>
+    {% set s = deck.gen_stats %}
+    {% if s %}
+    <div class="text-muted small mt-1">
+      <i class="bi bi-bar-chart-line"></i>
+      {{ s.generated or 0 }} generated
+      {% if s.skipped %}&nbsp;·&nbsp;<span class="text-warning">{{ s.skipped }} skipped</span>{% endif %}
+      {% if s.invalid %}&nbsp;·&nbsp;<span class="text-warning">{{ s.invalid }} invalid</span>{% endif %}
+      {% if s.dropped %}&nbsp;·&nbsp;{{ s.dropped }} outdated removed{% endif %}
+      {% if s.retries %}&nbsp;·&nbsp;{{ s.retries }} retries{% endif %}
+      {% if s.skipped_points %}
+      &nbsp;·&nbsp;
+      <a class="text-muted text-decoration-none" data-bs-toggle="collapse" href="#skipped-points">
+        <i class="bi bi-chevron-down" style="font-size:.75rem"></i> skipped topics
+      </a>
+      <div class="collapse mt-1" id="skipped-points">
+        <ul class="list-unstyled mb-0" style="font-size:.75rem">
+          {% for p in s.skipped_points %}<li class="text-muted">– {{ p }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if quiz_only %}
+    <a href="{{ url_for('quiz', decks=deck.id) }}" class="btn btn-success">
+      <i class="bi bi-play-fill"></i> Quiz
+    </a>
+    {% endif %}
+    {% if not quiz_only %}
+    <a href="{{ url_for('deck_add_sources', deck_id=deck.id) }}" class="btn btn-outline-primary">
+      <i class="bi bi-plus-lg"></i> Add sources
+    </a>
+    {% endif %}
+    <div class="dropdown">
+      <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="bi bi-download"></i> Export
+      </button>
+      <ul class="dropdown-menu">
+        <li>
+          <a class="dropdown-item" href="{{ url_for('deck_export', deck_id=deck.id) }}">
+            <i class="bi bi-filetype-json"></i> JSON (mkexam)
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('deck_export_anki', deck_id=deck.id) }}">
+            <i class="bi bi-box-arrow-up"></i> Anki (.apkg)
+          </a>
+        </li>
+      </ul>
+    </div>
+    {% if not quiz_only %}
+    {% if deck.gen_units %}
+    <form method="post" action="{{ url_for('deck_regenerate', deck_id=deck.id) }}"
+          onsubmit="return confirm('Regenerate all questions from stored sources? Existing questions will be replaced.')">
+      <button class="btn btn-outline-warning">
+        <i class="bi bi-arrow-clockwise"></i> Regenerate
+      </button>
+    </form>
+    {% else %}
+    <span class="btn btn-outline-warning disabled" title="No stored sources — add sources first to enable regeneration">
+      <i class="bi bi-arrow-clockwise"></i> Regenerate
+    </span>
+    {% endif %}
+    {% endif %}
+    <form method="post" action="{{ url_for('deck_delete', deck_id=deck.id) }}"
+          onsubmit="return confirm('Delete this deck?')">
+      <button class="btn btn-outline-danger"><i class="bi bi-trash"></i> Delete</button>
+    </form>
+  </div>
+</div>
+
+{% if deck.sources and not quiz_only %}
+<div class="mb-1">
+  <span class="text-muted small">
+    <i class="bi bi-file-earmark-text"></i>
+    {% for src in deck.sources %}
+      <span class="ms-1" style="word-break:break-all">{{ src }}</span>{% if not loop.last %} &middot;{% endif %}
+    {% endfor %}
+  </span>
+</div>
+{% endif %}
+{% if deck.gen_units and not quiz_only %}
+<div class="mb-3">
+  <span class="text-muted small">
+    <i class="bi bi-database"></i>
+    <strong>{{ deck.gen_units|length }}</strong> stored source section{{ 's' if deck.gen_units|length != 1 }}:
+    {% for u in deck.gen_units %}
+      <span class="badge bg-body-tertiary text-body-secondary border ms-1">{{ u.label or '(text)' }}</span>
+    {% endfor %}
+  </span>
+</div>
+{% endif %}
+
+<div id="cards-list">
+{% for card in deck.cards %}
+<div class="card mb-2">
+  <div class="card-body py-3">
+    <div class="d-flex align-items-start gap-2">
+      <div class="flex-grow-1">
+        <div class="d-flex flex-wrap gap-1 mb-1">
+          {% if card.chapter %}
+          <span class="badge bg-primary bg-opacity-10 text-primary border border-primary small">{{ card.chapter }}</span>
+          {% endif %}
+        </div>
+        <p class="mb-2 fw-semibold">{{ loop.index }}. {{ card.question }}</p>
+
+        <ul class="list-unstyled small mb-2">
+          {% for opt in card.options %}
+          {% set n = loop.index %}
+          <li class="py-1 px-2 rounded mb-1
+            {{ 'bg-success bg-opacity-10 text-success fw-semibold' if n in card.answer else 'text-muted' }}">
+            {{ n }}. {{ opt }}
+            {% if n in card.answer %}<i class="bi bi-check2 ms-1"></i>{% endif %}
+            {% if card.comments and loop.index0 < card.comments|length and card.comments[loop.index0] %}
+            <div class="fw-normal fst-italic small
+              {{ 'text-success' if n in card.answer else 'text-secondary' }}">
+              {{ card.comments[loop.index0] }}
+            </div>
+            {% endif %}
+            {% if n in card.answer and card.sources and (n|string) in card.sources %}
+            <div class="fw-normal fst-italic small text-success-emphasis mt-1 px-2 py-1 rounded border-start border-success border-3 bg-success bg-opacity-10">
+              <i class="bi bi-quote"></i> {{ card.sources[n|string] }}
+            </div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+
+        {% if card.explanation %}
+        <div class="text-muted small fst-italic border-top pt-2 mt-1">{{ card.explanation }}</div>
+        {% endif %}
+      </div>
+
+      <div class="text-end flex-shrink-0 small text-muted">
+        {% if card.repetitions > 0 %}
+          <i class="bi bi-arrow-repeat"></i> {{ card.repetitions }}×<br>
+          <span title="Next review">{{ card.next_review }}</span>
+        {% else %}
+          <span class="text-info">New</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DECK_ID = "{{ deck.id }}";
+
+function startRename() {
+  document.getElementById('deck-title').parentElement.classList.add('d-none');
+  document.getElementById('rename-form').classList.remove('d-none');
+  document.getElementById('rename-input').focus();
+  document.getElementById('rename-input').select();
+}
+
+function cancelRename() {
+  document.getElementById('deck-title').parentElement.classList.remove('d-none');
+  document.getElementById('rename-form').classList.add('d-none');
+}
+
+async function saveRename() {
+  const name = document.getElementById('rename-input').value.trim();
+  if (!name) return;
+  const res = await fetch(`/deck/${DECK_ID}/rename`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  });
+  const data = await res.json();
+  if (res.ok) {
+    document.getElementById('deck-title').textContent = data.name;
+    document.title = `${data.name} — mkexam`;
+    cancelRename();
+  } else {
+    alert(data.error);
+  }
+}
+</script>
+{% endblock %}

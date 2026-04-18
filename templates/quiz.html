@@ -1,0 +1,414 @@
+{% extends "base.html" %}
+{% block title %}Quiz — {% if decks|length == 1 %}{{ decks[0].name }}{% else %}{{ decks|length }} topics{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+
+    <!-- Mode selector -->
+    <div id="mode-selector">
+      {% if decks|length == 1 %}
+        <h4 class="fw-bold mb-1">{{ decks[0].name }}</h4>
+        <p class="text-muted mb-4">{{ decks[0].cards|length }} cards · Choose a quiz mode</p>
+      {% else %}
+        <h4 class="fw-bold mb-1">Multi-topic Quiz</h4>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for deck in decks %}
+          <span class="badge bg-secondary fw-normal">{{ deck.name }} ({{ deck.cards|length }})</span>
+          {% endfor %}
+        </div>
+        <p class="text-muted mb-4">
+          {{ decks|sum(attribute='cards')|list|length }} cards total · Choose a quiz mode
+        </p>
+      {% endif %}
+
+      <div class="row g-3 mb-4">
+        <div class="col-md-6">
+          <div class="card h-100 border-primary" role="button" onclick="startQuiz('sequential')"
+               tabindex="0" onkeydown="if(event.key==='Enter')startQuiz('sequential')">
+            <div class="card-body text-center py-4">
+              <i class="bi bi-list-ol text-primary" style="font-size:2rem"></i>
+              <h5 class="mt-3 mb-1">Sequential</h5>
+              <p class="text-muted small mb-0">All cards in order — get a final score.</p>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card h-100 border-warning" role="button" onclick="startQuiz('spaced')"
+               tabindex="0" onkeydown="if(event.key==='Enter')startQuiz('spaced')">
+            <div class="card-body text-center py-4">
+              <i class="bi bi-calendar-check text-warning" style="font-size:2rem"></i>
+              <h5 class="mt-3 mb-1">Spaced Repetition</h5>
+              <p class="text-muted small mb-0">Cards due today first, then the rest by SM-2 schedule.</p>
+              <span class="badge bg-warning text-dark mt-2">{{ due_count }} due today</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <a href="{{ url_for('index') }}" class="btn btn-outline-secondary w-100">
+        <i class="bi bi-arrow-left"></i> Back to decks
+      </a>
+    </div>
+
+    <!-- Quiz in progress -->
+    <div id="quiz-area" style="display:none">
+      <div class="d-flex justify-content-between align-items-center mb-2 small text-muted">
+        <span id="q-counter">Question 1 / 1</span>
+        <div class="d-flex align-items-center gap-3">
+          <span id="q-score">Score: 0</span>
+          <button class="btn btn-sm btn-outline-secondary py-0" onclick="endQuiz()"
+                  title="End quiz and see current results">
+            <i class="bi bi-stop-circle"></i> End
+          </button>
+        </div>
+      </div>
+      <div class="progress mb-4" style="height:6px">
+        <div class="progress-bar" id="q-progress" style="width:0%"></div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body p-4">
+          <!-- Topic / chapter badges + skip/hide -->
+          <div class="d-flex align-items-start justify-content-between mb-3 gap-2">
+            <div class="d-flex flex-wrap gap-1">
+              <span class="badge bg-body-tertiary text-body-secondary border" id="q-deck-badge"
+                    style="font-size:.75rem"></span>
+              <span class="badge bg-primary bg-opacity-10 text-primary border border-primary"
+                    id="q-chapter-badge" style="font-size:.75rem; display:none"></span>
+            </div>
+            <div class="d-flex gap-1 flex-shrink-0" id="q-skip-row">
+              <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="skipQuestion()">
+                <i class="bi bi-skip-forward"></i> Skip
+              </button>
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="hideCard(true)">
+                <i class="bi bi-eye-slash"></i> Hide
+              </button>
+            </div>
+          </div>
+
+          <p class="fs-5 fw-semibold mb-1" id="q-text"></p>
+          <p class="text-muted small mb-4">Select the <strong>2 correct answers</strong>.</p>
+
+          <!-- 5 option checkboxes -->
+          <div id="q-options" class="d-grid gap-2"></div>
+
+          <button class="btn btn-primary w-100 mt-3" id="q-submit"
+                  onclick="submitSelected()" disabled>
+            Submit
+          </button>
+        </div>
+      </div>
+
+      <!-- Feedback -->
+      <div id="q-feedback" class="card mb-3" style="display:none">
+        <div class="card-body p-3">
+          <div class="d-flex gap-2 align-items-center mb-2">
+            <span id="fb-icon" class="fs-4"></span>
+            <strong id="fb-label"></strong>
+          </div>
+          <p id="fb-explanation" class="text-muted small mb-1"></p>
+          <p id="fb-review" class="text-muted small mb-0"></p>
+        </div>
+      </div>
+
+      <button class="btn btn-primary w-100 py-2" id="q-next" style="display:none"
+              onclick="nextQuestion()">
+        Next <i class="bi bi-arrow-right"></i>
+      </button>
+      <button class="btn btn-sm btn-outline-danger w-100 mt-2" id="q-hide-after"
+              style="display:none" onclick="hideCard(false)">
+        <i class="bi bi-eye-slash"></i> Hide permanently
+      </button>
+    </div>
+
+    <!-- Final score -->
+    <div id="quiz-done" style="display:none" class="text-center py-4">
+      <div id="score-icon" class="mb-3" style="font-size:4rem"></div>
+      <h3 class="fw-bold" id="final-score-text"></h3>
+      <p class="text-muted" id="final-sub"></p>
+      <div class="d-flex gap-3 justify-content-center mt-4">
+        <button class="btn btn-primary" onclick="location.reload()">
+          <i class="bi bi-arrow-clockwise"></i> Try again
+        </button>
+        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">
+          <i class="bi bi-grid"></i> Back to decks
+        </a>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DECK_IDS = {{ decks | map(attribute='id') | list | tojson }};
+let sessionId = null;
+let currentCard = null;
+let mode = null;
+let totalCards = 0;
+let nextData = null;
+let currentScore = 0;
+let currentAnswered = 0;
+
+async function startQuiz(m) {
+  mode = m;
+  const res = await fetch('/api/quiz/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({decks: DECK_IDS, mode})
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Could not start quiz.'); return; }
+  sessionId = data.session_id;
+  totalCards = data.total;
+  document.getElementById('mode-selector').style.display = 'none';
+  document.getElementById('quiz-area').style.display = '';
+  showCard(data.card, 1, 0);
+}
+
+function showCard(card, index, score) {
+  currentCard = card;
+  nextData = null;
+
+  document.getElementById('q-counter').textContent = `Question ${index} / ${totalCards}`;
+  document.getElementById('q-score').textContent = `Score: ${score}`;
+  document.getElementById('q-progress').style.width = ((index - 1) / totalCards * 100) + '%';
+
+  const deckBadge = document.getElementById('q-deck-badge');
+  deckBadge.textContent = card.deck_name || '';
+  deckBadge.style.display = card.deck_name ? '' : 'none';
+
+  const chapterBadge = document.getElementById('q-chapter-badge');
+  chapterBadge.textContent = card.chapter || '';
+  chapterBadge.style.display = card.chapter ? '' : 'none';
+
+  document.getElementById('q-text').textContent = card.question;
+  document.getElementById('q-feedback').style.display = 'none';
+  document.getElementById('q-next').style.display = 'none';
+  document.getElementById('q-next').innerHTML = 'Next <i class="bi bi-arrow-right"></i>';
+  document.getElementById('q-next').onclick = nextQuestion;
+  document.getElementById('q-skip-row').style.display = '';
+  document.getElementById('q-hide-after').style.display = 'none';
+
+  // Tag each option with its original 1-based index, then shuffle
+  const container = document.getElementById('q-options');
+  container.innerHTML = '';
+  const tagged = card.options.map((text, i) => ({text, index: i + 1}));
+  tagged.sort(() => Math.random() - 0.5);
+  tagged.forEach(({text, index}, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-outline-secondary text-start option-btn';
+    btn.textContent = (i + 1) + '. ' + text;
+    btn.dataset.index = index; // original 1-based index sent to backend
+    btn.onclick = () => toggleOption(btn);
+    container.appendChild(btn);
+  });
+
+  const submit = document.getElementById('q-submit');
+  submit.disabled = true;
+  submit.style.display = '';
+}
+
+function toggleOption(btn) {
+  const selected = document.querySelectorAll('.option-btn.active');
+  if (btn.classList.contains('active')) {
+    btn.classList.remove('active', 'btn-primary');
+    btn.classList.add('btn-outline-secondary');
+  } else {
+    if (selected.length >= 2) return; // max 2
+    btn.classList.add('active', 'btn-primary');
+    btn.classList.remove('btn-outline-secondary');
+  }
+  const now = document.querySelectorAll('.option-btn.active').length;
+  document.getElementById('q-submit').disabled = (now !== 2);
+}
+
+async function submitSelected() {
+  const selected = [...document.querySelectorAll('.option-btn.active')]
+    .map(b => b.dataset.index);
+  if (selected.length !== 2) return;
+
+  // Lock options
+  document.querySelectorAll('.option-btn').forEach(b => b.disabled = true);
+  document.getElementById('q-submit').disabled = true;
+
+  const res = await fetch('/api/quiz/answer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      session_id: sessionId,
+      card_id: currentCard.id,
+      answer: selected.join(',')
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error); return; }
+
+  // Colour options and show per-option comments + source excerpts
+  const correctIndices = new Set(data.correct_answer.split(' and ').map(s => s.trim()));
+  const comments = currentCard.comments || {};
+  const sources  = data.sources || {};
+
+  document.querySelectorAll('.option-btn').forEach(btn => {
+    const idx = btn.dataset.index;
+    const wasSelected = btn.classList.contains('active');
+    btn.classList.remove('active', 'btn-primary', 'btn-outline-secondary');
+    if (correctIndices.has(idx)) {
+      btn.classList.add('btn-success');
+    } else if (wasSelected) {
+      btn.classList.add('btn-danger');
+    } else {
+      btn.classList.add('btn-outline-secondary');
+    }
+
+    // Mark user's selections with an icon
+    if (wasSelected) {
+      const icon = document.createElement('i');
+      icon.className = 'bi float-end ms-2 ' +
+        (correctIndices.has(idx) ? 'bi-check-circle-fill' : 'bi-x-circle-fill');
+      btn.appendChild(icon);
+    }
+
+    // Comment below the option button (comments is a list, idx is 1-based)
+    let lastEl = btn;
+    const comment = Array.isArray(comments) ? comments[parseInt(idx) - 1] : comments[idx];
+    if (comment) {
+      const note = document.createElement('div');
+      note.className = 'small mt-1 fst-italic ' +
+        (correctIndices.has(idx) ? 'text-success' : 'text-danger');
+      note.style.opacity = correctIndices.has(idx) || wasSelected ? '1' : '0.6';
+      note.textContent = comment;
+      lastEl.after(note);
+      lastEl = note;
+    }
+
+    // Source excerpt for every option — green for correct, muted for wrong
+    if (sources[idx]) {
+      const isCorrect = correctIndices.has(idx);
+      const src = document.createElement('div');
+      src.className = 'small mt-1 px-2 py-1 rounded border-start border-3 ' +
+        (isCorrect
+          ? 'border-success bg-success bg-opacity-10 text-success-emphasis'
+          : 'border-secondary bg-body-secondary text-body-secondary');
+      // Split "[Section heading] excerpt" into ref and body
+      const raw = sources[idx];
+      const refMatch = raw.match(/^\[([^\]]+)\]\s*/);
+      if (refMatch) {
+        const ref = document.createElement('span');
+        ref.className = 'fw-semibold me-1';
+        ref.textContent = refMatch[1] + ':';
+        src.appendChild(ref);
+        const body = document.createElement('span');
+        body.className = 'fst-italic';
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-quote me-1';
+        body.appendChild(icon);
+        body.appendChild(document.createTextNode(raw.slice(refMatch[0].length)));
+        src.appendChild(body);
+      } else {
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-quote me-1 fst-italic';
+        src.appendChild(icon);
+        src.appendChild(document.createTextNode(raw));
+      }
+      lastEl.after(src);
+    }
+  });
+
+  // Feedback
+  const fb = document.getElementById('q-feedback');
+  fb.style.display = '';
+  fb.className = 'card mb-3 border-' + (data.correct ? 'success' : 'danger');
+  document.getElementById('fb-icon').textContent = data.correct ? '✅' : '❌';
+  // Collect correct answer texts from the (now-coloured) option buttons
+  const correctTexts = data.correct_answer.split(' and ').map(idx => {
+    const btn = document.querySelector(`.option-btn[data-index="${idx.trim()}"]`);
+    if (!btn) return '';
+    // btn.textContent starts with "N. text" — strip the leading "N. "
+    return btn.textContent.replace(/^\d+\.\s*/, '').replace(/[✓✗].*$/, '').trim();
+  }).filter(Boolean);
+  document.getElementById('fb-label').textContent = data.correct
+    ? 'Correct!'
+    : 'Incorrect. Correct answers: ' + correctTexts.join(' · ');
+  document.getElementById('fb-explanation').textContent = data.explanation;
+  document.getElementById('fb-review').textContent =
+    mode === 'spaced' ? `Next review in ${data.interval} day(s) · ${data.next_review}` : '';
+
+  currentScore = data.score;
+  currentAnswered = data.answered;
+  document.getElementById('q-score').textContent = `Score: ${data.score}`;
+  document.getElementById('q-submit').style.display = 'none';
+  document.getElementById('q-skip-row').style.display = 'none';
+  document.getElementById('q-hide-after').style.display = '';
+
+  const nextBtn = document.getElementById('q-next');
+  nextBtn.style.display = '';
+  if (data.next_card) {
+    nextData = {card: data.next_card, index: data.answered + 1, score: data.score};
+  } else {
+    nextBtn.innerHTML = 'See results';
+    nextBtn.onclick = () => showResults(data.score, data.total);
+  }
+}
+
+function nextQuestion() {
+  if (nextData) showCard(nextData.card, nextData.index, nextData.score);
+}
+
+async function skipQuestion() {
+  const res = await fetch('/api/quiz/skip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: sessionId})
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Skip failed.'); return; }
+  currentAnswered = data.answered;
+  if (data.next_card) {
+    showCard(data.next_card, data.answered + 1, data.score);
+  } else {
+    showResults(data.score, data.total);
+  }
+}
+
+async function hideCard(advance) {
+  const res = await fetch('/api/card/hide', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: sessionId, card_id: currentCard.id, advance})
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Hide failed.'); return; }
+  currentAnswered = data.answered;
+  document.getElementById('q-hide-after').style.display = 'none';
+  document.getElementById('q-next').style.display = 'none';
+  if (data.next_card) {
+    showCard(data.next_card, data.answered + 1, data.score);
+  } else {
+    showResults(data.score, data.total);
+  }
+}
+
+function endQuiz() {
+  if (!sessionId || currentAnswered === 0) {
+    alert('Answer at least one question to see results.');
+    return;
+  }
+  showResults(currentScore, currentAnswered);
+}
+
+function showResults(score, total) {
+  document.getElementById('quiz-area').style.display = 'none';
+  document.getElementById('quiz-done').style.display = '';
+  const pct = Math.round((score / total) * 100);
+  document.getElementById('score-icon').textContent =
+    pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '📚';
+  document.getElementById('final-score-text').textContent =
+    `${score} / ${total} correct (${pct}%)`;
+  document.getElementById('final-sub').textContent =
+    pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort — keep reviewing!' : 'Keep studying and try again!';
+}
+</script>
+{% endblock %}
