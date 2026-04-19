@@ -492,6 +492,9 @@ def _gen_error(exc: Exception) -> str:
         return "Gemini rate limit reached. Wait a minute and try again."
     if "503" in msg:
         return "Gemini is temporarily overloaded. Will retry automatically."
+    msg_lower = msg.lower()
+    if "model" in msg_lower and any(x in msg_lower for x in ("not found", "does not exist", "invalid model", "no such model")):
+        return f"Model not found — check the model name and try again. ({msg})"
     return f"Generation failed: {msg}"
 
 
@@ -760,6 +763,22 @@ def job_continue(job_id):
         daemon=True,
     ).start()
     return jsonify(ok=True)
+
+
+@app.route("/api/openai-models")
+def openai_models_api():
+    base_url = request.args.get("base_url", "").strip()
+    api_key  = request.args.get("api_key",  "").strip() or "no-key"
+    if not base_url:
+        return jsonify(error="base_url is required"), 400
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=base_url.rstrip("/") + "/", api_key=api_key, timeout=10.0)
+        models = client.models.list()
+        ids = sorted(m.id for m in models.data)
+        return jsonify(models=ids)
+    except Exception as exc:
+        return jsonify(error=str(exc)), 502
 
 
 @app.route("/api/job/<job_id>/confirm", methods=["POST"])

@@ -120,10 +120,20 @@
                      placeholder="{{ '(set in .env)' if env_openai_api_key else 'Leave empty if not required' }}">
             </div>
             <div class="mb-1">
-              <label class="form-label small fw-semibold">Model name</label>
-              <input type="text" name="openai_model" class="form-control form-control-sm"
-                     placeholder="e.g. llama-3.3-70b-instruct"
-                     value="{{ env_openai_model }}">
+              <label class="form-label small fw-semibold">Model</label>
+              <div class="d-flex gap-2 mb-1">
+                <select id="openai-model-select" class="form-select form-select-sm flex-grow-1"
+                        style="display:none" onchange="onModelSelectChange(this)"></select>
+                <input type="text" name="openai_model" id="openai-model-input"
+                       class="form-control form-control-sm flex-grow-1"
+                       placeholder="e.g. llama-3.3-70b-instruct"
+                       value="{{ env_openai_model }}">
+                <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                        id="load-models-btn" onclick="loadModels()" title="Load available models">
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
+              <div id="openai-model-msg" class="form-text"></div>
             </div>
           </div>
         </div>
@@ -256,6 +266,84 @@ document.getElementById('gen-form').addEventListener('submit', function(e) {
 function switchBackend(be) {
   document.getElementById('be-gemini-fields').style.display = be === 'gemini' ? '' : 'none';
   document.getElementById('be-openai-fields').style.display = be === 'openai'  ? '' : 'none';
+}
+
+function setModelMsg(html, cls) {
+  const el = document.getElementById('openai-model-msg');
+  el.innerHTML = html;
+  el.className = 'form-text ' + (cls || '');
+}
+
+function showManualInput(prefill) {
+  const sel = document.getElementById('openai-model-select');
+  const inp = document.getElementById('openai-model-input');
+  if (prefill != null) inp.value = prefill;
+  else if (sel.value && sel.value !== '__manual__') inp.value = sel.value;
+  sel.style.display = 'none';
+  sel.removeAttribute('name');
+  inp.style.display = '';
+  inp.name = 'openai_model';
+}
+
+function populateModelSelect(models) {
+  const sel = document.getElementById('openai-model-select');
+  const inp = document.getElementById('openai-model-input');
+  const current = inp.value;
+  sel.innerHTML = '<option value="">— select model —</option>';
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    if (m === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  const manual = document.createElement('option');
+  manual.value = '__manual__'; manual.textContent = '✏ Enter manually…';
+  sel.appendChild(manual);
+  if (!sel.value || sel.value === '') sel.value = models[0] || '';
+  sel.style.display = '';
+  sel.name = 'openai_model';
+  inp.style.display = 'none';
+  inp.removeAttribute('name');
+}
+
+function onModelSelectChange(sel) {
+  if (sel.value === '__manual__') {
+    showManualInput();
+    setModelMsg('');
+  }
+}
+
+function loadModels() {
+  const baseUrl = document.querySelector('[name="openai_base_url"]').value.trim();
+  const apiKeyEl = document.querySelector('[name="openai_api_key"]');
+  const apiKey = apiKeyEl ? apiKeyEl.value.trim() : '';
+  if (!baseUrl) { setModelMsg('Enter a base URL first.', 'text-warning'); return; }
+  const btn = document.getElementById('load-models-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  setModelMsg('Loading models…', 'text-muted');
+  fetch('/api/openai-models?base_url=' + encodeURIComponent(baseUrl) +
+        '&api_key=' + encodeURIComponent(apiKey))
+    .then(r => r.json())
+    .then(data => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+      if (data.error || !data.models?.length) {
+        setModelMsg('Could not load model list — enter name manually.', 'text-warning');
+        showManualInput();
+      } else {
+        populateModelSelect(data.models);
+        setModelMsg(data.models.length + ' model(s) found. ' +
+          '<a href="#" onclick="showManualInput();setModelMsg(\'\');return false;">Enter manually…</a>',
+          'text-muted');
+      }
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+      setModelMsg('Could not reach endpoint — enter name manually.', 'text-warning');
+      showManualInput();
+    });
 }
 
 function highlightModel(radio) {
