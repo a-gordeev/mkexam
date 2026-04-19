@@ -49,7 +49,7 @@ if errorlevel 1 goto venv_failed
 
 :install_packages
 echo  Installing/updating packages...
-.venv\Scripts\pip install -q -r requirements.txt
+.venv\Scripts\python -m pip install -q -r requirements.txt
 if errorlevel 1 goto pip_failed
 
 :: Launch
