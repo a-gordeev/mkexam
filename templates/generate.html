@@ -174,6 +174,7 @@ const SOURCE_ICONS = {
   url:     '<i class="bi bi-link-45deg"></i>',
   pdf:     '<i class="bi bi-file-earmark-pdf text-danger"></i>',
   text:    '<i class="bi bi-textarea-t"></i>',
+  mp4:     '<i class="bi bi-camera-video"></i>',
 };
 
 function addSource(defaultType = 'youtube') {
@@ -185,7 +186,7 @@ function addSource(defaultType = 'youtube') {
     <div class="card-header bg-body-tertiary d-flex align-items-center gap-2 py-2">
       <span class="fw-semibold small text-muted">Source ${sourceCount}</span>
       <div class="btn-group btn-group-sm ms-auto" role="group">
-        ${['youtube','url','pdf','text'].map(t => `
+        ${['youtube','url','pdf','text','mp4'].map(t => `
           <input type="radio" class="btn-check" name="src_type_${idx}" id="st_${idx}_${t}"
                  value="${t}" ${t === defaultType ? 'checked' : ''}
                  onchange="switchSourceType(${idx}, '${t}')">
@@ -219,6 +220,18 @@ function renderSourceInput(idx, type) {
   if (type === 'text') return `
     <textarea name="paste_text_${idx}" class="form-control" rows="6"
               placeholder="Paste transcript or notes…"></textarea>`;
+  if (type === 'mp4') return `
+    <input type="file" name="mp4_file_${idx}" class="form-control mb-2"
+           accept=".mp4,.mov,.avi,.mkv,.webm">
+    <label class="form-label small fw-semibold mb-1">Whisper model</label>
+    <select name="whisper_model_${idx}" class="form-select form-select-sm">
+      <option value="tiny">tiny (~150 MB) — fastest, lower accuracy</option>
+      <option value="base">base (~290 MB)</option>
+      <option value="small" selected>small (~970 MB) — recommended</option>
+      <option value="medium">medium (~3 GB) — high accuracy</option>
+      <option value="large-v3">large-v3 (~6 GB) — most accurate, slow</option>
+    </select>
+    <div class="form-text">Model weights are downloaded automatically on first use.</div>`;
   return '';
 }
 

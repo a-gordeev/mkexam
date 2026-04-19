@@ -208,6 +208,78 @@ def ingest_pdf(file_path: Path) -> list[dict]:
     return sections
 
 
+def ingest_mp4(file_path: Path, model: str = "small", progress_cb=None) -> str:
+    """Transcribe a video file to a timestamped transcript string using Whisper."""
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        raise RuntimeError("imageio-ffmpeg not installed. Run: pip install imageio-ffmpeg")
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise RuntimeError("faster-whisper not installed. Run: pip install faster-whisper")
+
+    import subprocess
+
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_path = Path(tmpdir) / "audio.wav"
+
+        if progress_cb:
+            progress_cb("Extracting audio…")
+
+        result = subprocess.run(
+            [ffmpeg_exe, "-i", str(file_path),
+             "-ar", "16000", "-ac", "1", "-f", "wav", str(audio_path),
+             "-y", "-loglevel", "error"],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg audio extraction failed: {result.stderr.decode(errors='replace')}"
+            )
+
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        is_cached = (cache_dir / f"models--Systran--faster-whisper-{model}").exists()
+
+        if progress_cb:
+            if not is_cached:
+                progress_cb(
+                    f"Downloading Whisper '{model}' model (first use only, may take a few minutes)…"
+                )
+            else:
+                progress_cb("Loading Whisper model…")
+
+        whisper_model = WhisperModel(model, device="cpu", compute_type="int8")
+
+        if progress_cb:
+            progress_cb("Transcribing audio…")
+
+        segments, _ = whisper_model.transcribe(str(audio_path), beam_size=5)
+        return _whisper_segments_to_transcript(segments)
+
+
+def _whisper_segments_to_transcript(segments) -> str:
+    """Convert faster-whisper segments to a transcript string with [M:SS] markers every ~30s."""
+    result: list[str] = []
+    last_marker_secs: float = -60.0
+
+    for seg in segments:
+        start: float = seg.start
+        text = seg.text.strip()
+        if not text:
+            continue
+        if start - last_marker_secs >= 30:
+            total_m = int(start) // 60
+            s_val = int(start) % 60
+            result.append(f"[{total_m}:{s_val:02d}]")
+            last_marker_secs = start
+        result.append(text)
+
+    return " ".join(result)
+
+
 def ingest_url(url: str) -> str:
     """Extract main article text from a web URL."""
     try:

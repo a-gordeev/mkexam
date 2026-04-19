@@ -300,8 +300,11 @@ async function poll() {
     if (!confirming) {
       const phase = data.phase || 'generating';
       const msgs = PHASE_MSGS[phase] || ['Working…'];
+      const ingestMsg = data.ingest_msg || '';
       document.getElementById('status-msg').textContent =
-        msgs[Math.floor(Date.now() / 4000) % msgs.length];
+        ingestMsg || msgs[Math.floor(Date.now() / 4000) % msgs.length];
+      document.getElementById('status-sub').textContent =
+        ingestMsg ? '' : 'This may take up to a minute for long content.';
 
       // Phase → [start%, end%] within the overall pipeline
       const PHASE_PCT = {

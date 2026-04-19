@@ -7,3 +7,5 @@ trafilatura>=1.9
 python-dotenv>=1.0
 genanki>=0.13
 requests>=2.31
+faster-whisper>=1.0
+imageio-ffmpeg>=0.4

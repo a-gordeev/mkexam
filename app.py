@@ -15,7 +15,7 @@ from flask import (
 load_dotenv()
 
 from mkexam.storage import DeckStorage
-from mkexam.ingest import ingest_youtube, ingest_pdf, ingest_url
+from mkexam.ingest import ingest_youtube, ingest_pdf, ingest_url, ingest_mp4
 from mkexam.generate import (
     analyze_contradictions, verify_cards, list_key_points,
     generate_for_points, generate_batch, segment_transcript,
@@ -236,6 +236,20 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
                 src = spec["type"]
                 if src == "youtube":
                     text = ingest_youtube(spec["url"])
+                    parts.append(text)
+                    sections = segment_transcript(text)
+                    for sec in sections:
+                        label = sec.get("heading", "")
+                        body = (f"[{label}]\n{sec['text']}" if label else sec["text"])
+                        pdf_units.append({"label": label, "text": body})
+                elif src == "mp4":
+                    p = Path(spec["mp4_path"])
+                    def _mp4_cb(msg: str, _jid=job_id) -> None:
+                        _update_job(_jid, ingest_msg=msg)
+                    text = ingest_mp4(p, model=spec.get("whisper_model", "small"),
+                                      progress_cb=_mp4_cb)
+                    _update_job(job_id, ingest_msg="")
+                    p.unlink(missing_ok=True)
                     parts.append(text)
                     sections = segment_transcript(text)
                     for sec in sections:
@@ -1077,6 +1091,16 @@ def _handle_generate_post(req, target_deck_id: str | None):
                 flash(f"Source {idx+1}: enter a URL.", "danger")
                 return render_template("generate.html", target_deck=target_deck)
             spec["label"] = spec["url"]
+        elif src_type == "mp4":
+            f = req.files.get(f"mp4_file_{idx}")
+            if not f or not f.filename:
+                flash(f"Source {idx+1}: upload a video file.", "danger")
+                return render_template("generate.html", target_deck=target_deck)
+            tmp = UPLOAD_DIR / f"{uuid.uuid4()}.mp4"
+            f.save(tmp)
+            spec["mp4_path"] = str(tmp)
+            spec["whisper_model"] = req.form.get(f"whisper_model_{idx}", "small")
+            spec["label"] = f.filename
         elif src_type == "pdf":
             f = req.files.get(f"pdf_file_{idx}")
             if not f or not f.filename:
