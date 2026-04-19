@@ -3,68 +3,6 @@ import tempfile
 from pathlib import Path
 
 
-def ingest_youtube(url: str) -> str:
-    """Extract captions/transcript from a YouTube video using yt-dlp."""
-    try:
-        import yt_dlp
-    except ImportError:
-        raise RuntimeError("yt-dlp is not installed. Run: pip install yt-dlp")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        opts = {
-            "skip_download": True,
-            "writeautomaticsub": True,
-            "writesubtitles": True,
-            "subtitleslangs": ["en", "en-US", "en-GB"],
-            "subtitlesformat": "vtt",
-            "outtmpl": str(Path(tmpdir) / "video"),
-            "quiet": True,
-            "no_warnings": True,
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.extract_info(url, download=True)
-
-        vtt_files = list(Path(tmpdir).glob("*.vtt"))
-        if vtt_files:
-            return _parse_vtt(vtt_files[0].read_text(encoding="utf-8"))
-
-    raise RuntimeError(
-        "No captions found for this video. "
-        "Try enabling auto-generated captions or paste the transcript manually."
-    )
-
-
-def _parse_vtt(vtt: str) -> str:
-    """Parse VTT subtitles into a transcript with embedded time markers every ~30 seconds."""
-    result: list[str] = []
-    current_secs: int | None = None
-    last_marker_secs: int = -60
-    seen: set[str] = set()
-
-    for line in vtt.splitlines():
-        line = line.strip()
-        if not line or line.startswith("WEBVTT") or re.match(r"^\d+$", line):
-            continue
-        # Timestamp line: "00:01:23.456 --> ..."
-        ts = re.match(r'(\d+):(\d+):(\d+)', line)
-        if "-->" in line and ts:
-            h, m, s = int(ts.group(1)), int(ts.group(2)), int(ts.group(3))
-            current_secs = h * 3600 + m * 60 + s
-            continue
-        text = re.sub(r"<[^>]+>", "", line).strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        # Embed a time marker at ~30-second intervals
-        if current_secs is not None and current_secs - last_marker_secs >= 30:
-            total_m = current_secs // 60
-            s_val = current_secs % 60
-            result.append(f"[{total_m}:{s_val:02d}]")
-            last_marker_secs = current_secs
-        result.append(text)
-
-    return " ".join(result)
-
 
 def ingest_pdf(file_path: Path) -> list[dict]:
     """Extract text from a PDF as a list of sections {heading, text}.

@@ -170,14 +170,13 @@ function toggleAutoCount(auto) {
 let sourceCount = 0;
 
 const SOURCE_ICONS = {
-  youtube: '<i class="bi bi-youtube text-danger"></i>',
-  url:     '<i class="bi bi-link-45deg"></i>',
-  pdf:     '<i class="bi bi-file-earmark-pdf text-danger"></i>',
-  text:    '<i class="bi bi-textarea-t"></i>',
-  mp4:     '<i class="bi bi-camera-video"></i>',
+  url:  '<i class="bi bi-link-45deg"></i>',
+  pdf:  '<i class="bi bi-file-earmark-pdf text-danger"></i>',
+  text: '<i class="bi bi-textarea-t"></i>',
+  mp4:  '<i class="bi bi-camera-video"></i>',
 };
 
-function addSource(defaultType = 'youtube') {
+function addSource(defaultType = 'url') {
   const idx = sourceCount++;
   const div = document.createElement('div');
   div.className = 'card mb-3 source-block';
@@ -186,7 +185,7 @@ function addSource(defaultType = 'youtube') {
     <div class="card-header bg-body-tertiary d-flex align-items-center gap-2 py-2">
       <span class="fw-semibold small text-muted">Source ${sourceCount}</span>
       <div class="btn-group btn-group-sm ms-auto" role="group">
-        ${['youtube','url','pdf','text','mp4'].map(t => `
+        ${['url','pdf','text','mp4'].map(t => `
           <input type="radio" class="btn-check" name="src_type_${idx}" id="st_${idx}_${t}"
                  value="${t}" ${t === defaultType ? 'checked' : ''}
                  onchange="switchSourceType(${idx}, '${t}')">
@@ -208,10 +207,6 @@ function addSource(defaultType = 'youtube') {
 }
 
 function renderSourceInput(idx, type) {
-  if (type === 'youtube') return `
-    <input type="url" name="youtube_url_${idx}" class="form-control"
-           placeholder="https://www.youtube.com/watch?v=...">
-    <div class="form-text">Captions extracted automatically.</div>`;
   if (type === 'url') return `
     <input type="url" name="web_url_${idx}" class="form-control"
            placeholder="https://example.com/article">`;

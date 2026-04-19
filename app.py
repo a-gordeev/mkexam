@@ -15,7 +15,7 @@ from flask import (
 load_dotenv()
 
 from mkexam.storage import DeckStorage
-from mkexam.ingest import ingest_youtube, ingest_pdf, ingest_url, ingest_mp4
+from mkexam.ingest import ingest_pdf, ingest_url, ingest_mp4
 from mkexam.generate import (
     analyze_contradictions, verify_cards, list_key_points,
     generate_for_points, generate_batch, segment_transcript,
@@ -234,15 +234,7 @@ def _do_background_generate(job_id: str, source_specs: list) -> None:
             if _check_stop(job_id): return
             try:
                 src = spec["type"]
-                if src == "youtube":
-                    text = ingest_youtube(spec["url"])
-                    parts.append(text)
-                    sections = segment_transcript(text)
-                    for sec in sections:
-                        label = sec.get("heading", "")
-                        body = (f"[{label}]\n{sec['text']}" if label else sec["text"])
-                        pdf_units.append({"label": label, "text": body})
-                elif src == "mp4":
+                if src == "mp4":
                     p = Path(spec["mp4_path"])
                     def _mp4_cb(msg: str, _jid=job_id) -> None:
                         _update_job(_jid, ingest_msg=msg)
@@ -1079,13 +1071,7 @@ def _handle_generate_post(req, target_deck_id: str | None):
         if src_type is None:
             break
         spec = {"type": src_type}
-        if src_type == "youtube":
-            spec["url"] = req.form.get(f"youtube_url_{idx}", "").strip()
-            if not spec["url"]:
-                flash(f"Source {idx+1}: enter a YouTube URL.", "danger")
-                return render_template("generate.html", target_deck=target_deck)
-            spec["label"] = spec["url"]
-        elif src_type == "url":
+        if src_type == "url":
             spec["url"] = req.form.get(f"web_url_{idx}", "").strip()
             if not spec["url"]:
                 flash(f"Source {idx+1}: enter a URL.", "danger")
